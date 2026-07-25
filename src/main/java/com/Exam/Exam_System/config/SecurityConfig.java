@@ -1,6 +1,7 @@
 package com.Exam.Exam_System.config;
 
 import com.Exam.Exam_System.security.JwtAuthFilter;
+import com.Exam.Exam_System.security.LoginRateLimitFilter;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,10 +21,13 @@ public class SecurityConfig {
 
     private final CorsConfigurationSource corsConfigurationSource;
     private final JwtAuthFilter jwtAuthFilter;
+    private final LoginRateLimitFilter loginRateLimitFilter;
 
-    public SecurityConfig(CorsConfigurationSource corsConfigurationSource, JwtAuthFilter jwtAuthFilter) {
+    public SecurityConfig(CorsConfigurationSource corsConfigurationSource, JwtAuthFilter jwtAuthFilter,
+                          LoginRateLimitFilter loginRateLimitFilter) {
         this.corsConfigurationSource = corsConfigurationSource;
         this.jwtAuthFilter = jwtAuthFilter;
+        this.loginRateLimitFilter = loginRateLimitFilter;
     }
 
     @Bean
@@ -66,7 +70,10 @@ public class SecurityConfig {
                 .accessDeniedHandler((req, res, e) ->
                     write(res, HttpServletResponse.SC_FORBIDDEN, "FORBIDDEN",
                           "You do not have access to that.")))
-            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+            // Before the JWT filter too: a request being rate-limited should never
+            // even reach BCrypt's deliberately-slow password comparison.
+            .addFilterBefore(loginRateLimitFilter, JwtAuthFilter.class);
 
         return http.build();
     }
