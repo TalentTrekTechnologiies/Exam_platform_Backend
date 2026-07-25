@@ -149,6 +149,32 @@ public class AdminController {
     }
 
     /**
+     * Sets the institution's name and logo once, at the account level.
+     *
+     * Before this, CreateExam had no source to read a saved logo from, so every
+     * single exam started with a blank upload field — the same file had to be
+     * chosen again and again. This is what CreateExam now pre-fills from, so a
+     * logo set once here is reused automatically for every future exam. Passing
+     * no file leaves the existing logo untouched, so this can also be used to
+     * rename the institution alone.
+     */
+    @PutMapping("/profile")
+    public AuthResponse updateProfile(@RequestParam(required = false) String collegeName,
+                                      @RequestParam(required = false) MultipartFile logo) {
+        Admin admin = adminRepository.findById(currentUser.adminId())
+                .orElseThrow(() -> new NoSuchElementException("Account not found"));
+
+        if (collegeName != null && !collegeName.isBlank()) {
+            admin.setCollegeName(collegeName.trim());
+        }
+        if (logo != null && !logo.isEmpty()) {
+            admin.setCollegeLogo(fileStorage.storeImage(logo));
+        }
+
+        return toAuthResponse(adminRepository.save(admin));
+    }
+
+    /**
      * Builds this institution's URL slug from its name, e.g.
      * "KSRM College of Engineering" -> "ksrm-college-of-engineering".
      *
