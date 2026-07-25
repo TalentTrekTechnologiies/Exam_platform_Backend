@@ -73,6 +73,14 @@ morning of an exam if there has been a quiet stretch.
    | `CORS_ORIGINS` | leave a placeholder for now, e.g. `https://placeholder` — you'll fix this in step 4 once the frontend URL exists |
    | `CANDIDATE_BASE_URL` | same placeholder — fixed in step 4 |
    | `MAIL_ENABLED` | `false` |
+   | `JAVA_OPTS` | `-Xmx300m -XX:MaxMetaspaceSize=128m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError` |
+   | `DB_POOL_SIZE` | `5` |
+   | `TOMCAT_THREADS` | `20` |
+
+   The last three matter: the Dockerfile's default memory settings assume a
+   real server with several GB (correct for the VPS path), which is enough to
+   get the whole container OOM-killed on Render's free 512MB instance before
+   Spring Boot finishes starting. These three keep it inside that budget.
 
 4. **Create Web Service.** First build takes a few minutes. Watch the logs for
    `Started ExamSystemApplication`.

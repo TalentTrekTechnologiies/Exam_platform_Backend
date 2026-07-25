@@ -55,3 +55,19 @@ services:
       # ── Email: off until an SMTP account is wired up (costs nothing to leave off) ──
       - key: MAIL_ENABLED
         value: "false"
+
+      # ── Fits the free instance's 512MB ──────────────────────────────────────
+      # The Dockerfile's default JAVA_OPTS (-XX:MaxRAMPercentage=75) assumes a
+      # real server with several GB, which is correct for the VPS/exam-day path
+      # in docker-compose.yml but oversized here — on Render's free 512MB
+      # instance the JVM's own bookkeeping (metaspace, thread stacks, GC
+      # structures) on top of a 75%-of-container heap estimate is enough to get
+      # the whole container OOM-killed before Spring Boot finishes starting.
+      # An explicit, conservative cap avoids that; likewise the connection pool
+      # and thread count, which were sized for a real sitting, not a free tier.
+      - key: JAVA_OPTS
+        value: "-Xmx300m -XX:MaxMetaspaceSize=128m -XX:+UseG1GC -XX:+ExitOnOutOfMemoryError"
+      - key: DB_POOL_SIZE
+        value: "5"
+      - key: TOMCAT_THREADS
+        value: "20"
