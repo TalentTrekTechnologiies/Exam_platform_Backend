@@ -1,0 +1,57 @@
+# Render Blueprint for the exam backend.
+#
+# Optional convenience — Render's dashboard flow (New → Web Service → connect
+# this repo) works without this file and is the path documented step-by-step in
+# deploy/RENDER.md, which is the authoritative source if this file and the
+# dashboard ever disagree. Render's Blueprint schema changes over time; treat
+# this as a starting point to review in the dashboard, not a blind "Apply".
+#
+# Secrets (sync: false) are never set here — Render prompts for them once and
+# stores them outside the repo. Nothing here is committed with a real value.
+
+services:
+  - type: web
+    name: exam-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # ── Required ──────────────────────────────────────────────────────────
+      - key: JWT_SECRET
+        sync: false          # openssl rand -base64 48
+      - key: DB_URL
+        sync: false          # jdbc:mysql://<host>:<port>/<db>?sslMode=REQUIRED&serverTimezone=Asia/Kolkata
+      - key: DB_USER
+        sync: false
+      - key: DB_PASSWORD
+        sync: false
+
+      # ── Schema ────────────────────────────────────────────────────────────
+      # 'update' for the very first deploy so tables get created, then switch
+      # to 'validate' in the dashboard and redeploy.
+      - key: DDL_AUTO
+        value: update
+
+      # ── Where the app is reached ──────────────────────────────────────────
+      - key: CORS_ORIGINS
+        sync: false          # the deployed frontend's Render URL + the KSRM domain
+      - key: CANDIDATE_BASE_URL
+        sync: false          # the deployed frontend's Render URL
+
+      # ── Deployment mode: dedicated KSRM install ──────────────────────────
+      - key: ALLOW_REGISTRATION
+        value: "false"
+      - key: SEED_ADMIN_EMAIL
+        sync: false
+      - key: SEED_ADMIN_PASSWORD
+        sync: false
+      - key: SEED_ADMIN_COLLEGE
+        sync: false
+      - key: SEED_ADMIN_CODE
+        sync: false          # must equal the frontend's VITE_INSTITUTION_CODE
+
+      # ── Email: off until an SMTP account is wired up (costs nothing to leave off) ──
+      - key: MAIL_ENABLED
+        value: "false"

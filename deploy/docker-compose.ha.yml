@@ -1,0 +1,60 @@
+# Exam-day stack WITH a database replica.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.ha.yml up -d
+#
+# Why this file exists
+# --------------------
+# A single MySQL is the one component whose failure ends a sitting in progress.
+# Backups recover yesterday; they do not save 5,000 candidates mid-paper. This
+# adds a streaming replica so that a primary failure costs minutes of manual
+# promotion rather than the whole exam.
+#
+# Be honest about what this is and is not:
+#   IS     — a hot copy of the data, seconds behind, on separate storage.
+#   IS NOT — automatic failover. Promotion is a deliberate human decision,
+#            because an automated flip that guesses wrong is worse than a pause.
+
+services:
+  db:
+    command: >
+      --server-id=1
+      --log-bin=mysql-bin
+      --binlog-format=ROW
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+      --binlog-expire-logs-seconds=604800
+    environment:
+      MYSQL_REPLICATION_USER: replica
+      MYSQL_REPLICATION_PASSWORD: ${REPLICA_PASSWORD}
+
+  db-replica:
+    image: mysql:8.4
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      TZ: Asia/Kolkata
+    command: >
+      --server-id=2
+      --relay-log=relay-bin
+      --gtid-mode=ON
+      --enforce-gtid-consistency=ON
+      --read-only=ON
+      --skip-replica-start=OFF
+    volumes:
+      # Deliberately a SEPARATE volume. A replica sharing the primary's disk
+      # protects against a MySQL crash but not against the disk itself failing.
+      - replica-data:/var/lib/mysql
+      - ./mysql-tuning.cnf:/etc/mysql/conf.d/tuning.cnf:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "3306"
+
+volumes:
+  replica-data:

@@ -1,0 +1,26 @@
+[mysqld]
+
+# ── Sized for a full exam hall ───────────────────────────────────────────────
+# Must exceed (app_instances x DB_POOL_SIZE) with headroom for admin sessions
+# and the health probes. Three instances x 50 = 150, so 300 leaves slack.
+max_connections = 300
+
+# The single biggest lever for read latency: keep the working set in memory.
+# Rule of thumb ~60-70% of the database host's RAM. 2G assumes a modest 4G box;
+# raise it on a real database server.
+innodb_buffer_pool_size = 2G
+innodb_buffer_pool_instances = 4
+
+# Durability vs. throughput. The default (1) fsyncs every commit — safest, and
+# correct for real exams where a lost submit is unacceptable. If a run is a
+# throwaway mock and you want more write throughput, 2 relaxes to once per second.
+innodb_flush_log_at_trx_commit = 1
+innodb_log_file_size = 512M
+innodb_flush_method = O_DIRECT
+
+# Short-lived exam sessions; don't hold idle connections for long.
+wait_timeout = 300
+interactive_timeout = 300
+
+# The answer table takes a steady stream of small writes.
+innodb_io_capacity = 1000
