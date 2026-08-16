@@ -2,14 +2,24 @@ package com.Exam.Exam_System.service;
 
 import com.Exam.Exam_System.dto.ParsedQuestion;
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.contentstream.PDFStreamEngine;
+import org.apache.pdfbox.contentstream.operator.Operator;
+import org.apache.pdfbox.cos.COSBase;
+import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.graphics.PDXObject;
 import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.text.PDFTextStripper;
+import org.apache.pdfbox.text.TextPosition;
+import org.apache.poi.xwpf.usermodel.IBodyElement;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFParagraph;
+import org.apache.poi.xwpf.usermodel.XWPFPicture;
 import org.apache.poi.xwpf.usermodel.XWPFPictureData;
+import org.apache.poi.xwpf.usermodel.XWPFRun;
+import org.apache.poi.xwpf.usermodel.XWPFTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -79,17 +89,15 @@ public class DocumentImportService {
         String name = file.getOriginalFilename() == null ? "" : file.getOriginalFilename().toLowerCase(Locale.ROOT);
 
         String text;
-        List<String> images;
+        List<String> images = new ArrayList<>();
         try {
             if (name.endsWith(".pdf")) {
                 try (PDDocument doc = Loader.loadPDF(file.getBytes())) {
-                    text = new PDFTextStripper().getText(doc);
-                    images = extractPdfImages(doc);
+                    text = readPdfInOrder(doc, images);
                 }
             } else if (name.endsWith(".docx")) {
                 try (XWPFDocument doc = new XWPFDocument(file.getInputStream())) {
-                    text = new org.apache.poi.xwpf.extractor.XWPFWordExtractor(doc).getText();
-                    images = extractDocxImages(doc);
+                    text = readDocxInOrder(doc, images);
                 }
             } else if (name.endsWith(".doc")) {
                 throw new IllegalArgumentException(
@@ -119,10 +127,24 @@ public class DocumentImportService {
         String currentSection = null;
         StringBuilder pendingText = new StringBuilder();
         String lastOptionLetter = null;
+        // Pictures that appeared before any question started — a cover page
+        // logo, a letterhead. They belong to nothing and are reported, not
+        // silently pinned onto question 1.
+        List<String> orphanImages = new ArrayList<>();
 
         for (String rawLine : text.split("\\r?\\n")) {
             String line = rawLine.strip();
             if (line.isEmpty()) continue;
+
+            // An image, at the point in the document where it actually appears.
+            // It belongs to whatever question is being read right now — which is
+            // the whole reason the readers preserve document order.
+            if (line.startsWith(IMAGE_MARKER)) {
+                String file = line.substring(IMAGE_MARKER.length()).strip();
+                if (current != null && !file.isEmpty()) current.getImages().add(file);
+                else if (!file.isEmpty()) orphanImages.add(file);
+                continue;
+            }
 
             Matcher section = SECTION.matcher(line);
             if (section.matches() && line.length() < 60) {
@@ -182,14 +204,19 @@ public class DocumentImportService {
                     + "or use the CSV import for full control.");
         }
 
-        // Images cannot be attached to a specific question reliably — a picture's
-        // position in the file says little about which question it belongs to.
-        // They are offered for manual attachment rather than guessed at.
-        if (!images.isEmpty()) {
-            documentWarnings.add(images.size() + " image(s) were extracted from the document. "
-                    + "Attach them to the right questions during review — their position in the file "
-                    + "is not a reliable guide to which question they belong to.");
-            if (!questions.isEmpty()) questions.get(0).setImages(images);
+        // Images are now attached where they actually appeared in the document,
+        // as the parse loop walked past them. Say plainly that they still need
+        // a glance: placement is a good inference, not a guarantee, and a figure
+        // on the wrong question is the kind of error a reviewer catches in
+        // seconds but a candidate cannot.
+        long placed = questions.stream().mapToLong(q -> q.getImages().size()).sum();
+        if (placed > 0) {
+            documentWarnings.add(placed + " image(s) were matched to the question they appear beside. "
+                    + "Check them during review — placement is inferred from the document's layout.");
+        }
+        if (!orphanImages.isEmpty()) {
+            documentWarnings.add(orphanImages.size() + " image(s) appeared before the first question "
+                    + "(a header or cover graphic) and were left unattached.");
         }
 
         int usable = (int) questions.stream().filter(ParsedQuestion::isUsable).count();
@@ -258,46 +285,194 @@ public class DocumentImportService {
         into.add(q);
     }
 
-    private List<String> extractPdfImages(PDDocument doc) {
-        List<String> saved = new ArrayList<>();
-        try {
-            Files.createDirectories(imageDir);
-            for (PDPage page : doc.getPages()) {
-                PDResources resources = page.getResources();
-                if (resources == null) continue;
-                for (var xobjectName : resources.getXObjectNames()) {
-                    PDXObject xobject = resources.getXObject(xobjectName);
-                    if (!(xobject instanceof PDImageXObject image)) continue;
+    // -- Reading a document in ORDER ----------------------------------------
+    //
+    // Text and images used to be extracted in two separate passes, which threw
+    // away the one thing that says which question a diagram belongs to: where
+    // it sat in the document. Every image then landed on question 1. For a real
+    // physics or chemistry paper, where most questions carry a figure, that
+    // made the import close to useless.
+    //
+    // Both readers below emit a single stream of lines with IMAGE_MARKER lines
+    // interleaved at the point the picture actually appears, so the parser can
+    // attach each one to the question it is sitting next to.
 
-                    String fileName = UUID.randomUUID() + ".png";
-                    ByteArrayOutputStream out = new ByteArrayOutputStream();
-                    ImageIO.write(image.getImage(), "png", out);
-                    Files.write(imageDir.resolve(fileName), out.toByteArray());
-                    saved.add(fileName);
+    static final String IMAGE_MARKER = "\u0000IMG:";
+
+    /**
+     * Word: body elements are already in document order, and a picture lives in
+     * a run inside a paragraph, so walking the body gives exact placement.
+     */
+    private String readDocxInOrder(XWPFDocument doc, List<String> saved) {
+        StringBuilder out = new StringBuilder();
+        ensureImageDir();
+
+        for (IBodyElement element : doc.getBodyElements()) {
+            if (element instanceof XWPFParagraph paragraph) {
+                appendParagraph(paragraph, out, saved);
+            } else if (element instanceof XWPFTable table) {
+                // Papers are sometimes laid out in tables; read cells in order.
+                for (var row : table.getRows()) {
+                    for (var cell : row.getTableCells()) {
+                        for (XWPFParagraph p : cell.getParagraphs()) appendParagraph(p, out, saved);
+                    }
                 }
             }
-        } catch (IOException | RuntimeException e) {
-            // A paper whose diagrams cannot be read is still worth importing for
-            // its text, so this never fails the whole operation.
-            log.warn("Could not extract every image from the PDF: {}", e.getMessage());
         }
-        return saved;
+        return out.toString();
     }
 
-    private List<String> extractDocxImages(XWPFDocument doc) {
-        List<String> saved = new ArrayList<>();
+    private void appendParagraph(XWPFParagraph paragraph, StringBuilder out, List<String> saved) {
+        String text = paragraph.getText();
+        if (text != null && !text.isBlank()) out.append(text.strip()).append("\n");
+
+        for (XWPFRun run : paragraph.getRuns()) {
+            for (XWPFPicture picture : run.getEmbeddedPictures()) {
+                String file = savePicture(picture.getPictureData());
+                if (file != null) {
+                    saved.add(file);
+                    out.append(IMAGE_MARKER).append(file).append("\n");
+                }
+            }
+        }
+    }
+
+    private String savePicture(XWPFPictureData data) {
+        try {
+            String extension = data.suggestFileExtension();
+            if (extension == null || extension.isBlank()) extension = "png";
+            String fileName = UUID.randomUUID() + "." + extension.toLowerCase(Locale.ROOT);
+            Files.write(imageDir.resolve(fileName), data.getData());
+            return fileName;
+        } catch (IOException | RuntimeException e) {
+            log.warn("Could not save an embedded image: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private void ensureImageDir() {
         try {
             Files.createDirectories(imageDir);
-            for (XWPFPictureData picture : doc.getAllPictures()) {
-                String extension = picture.suggestFileExtension();
-                if (extension == null || extension.isBlank()) extension = "png";
-                String fileName = UUID.randomUUID() + "." + extension.toLowerCase(Locale.ROOT);
-                Files.write(imageDir.resolve(fileName), picture.getData());
-                saved.add(fileName);
-            }
-        } catch (IOException | RuntimeException e) {
-            log.warn("Could not extract every image from the document: {}", e.getMessage());
+        } catch (IOException e) {
+            log.warn("Could not create the image directory: {}", e.getMessage());
         }
-        return saved;
     }
+
+    /**
+     * PDF: there is no document order to read, only marks on a page. So text
+     * lines and images are both collected with their vertical position and then
+     * merged top-down, per page, which reconstructs reading order well enough
+     * to place a figure under the question it illustrates.
+     */
+    private String readPdfInOrder(PDDocument doc, List<String> saved) throws IOException {
+        ensureImageDir();
+        StringBuilder out = new StringBuilder();
+        int pageCount = doc.getNumberOfPages();
+
+        for (int pageNo = 1; pageNo <= pageCount; pageNo++) {
+            List<Placed> items = new ArrayList<>();
+
+            PositionalStripper stripper = new PositionalStripper(items);
+            stripper.setStartPage(pageNo);
+            stripper.setEndPage(pageNo);
+            stripper.getText(doc);
+
+            try {
+                new ImageLocator(items, saved).processPage(doc.getPage(pageNo - 1));
+            } catch (IOException | RuntimeException e) {
+                // A paper whose diagrams cannot be read is still worth importing
+                // for its text, so this never fails the whole operation.
+                log.warn("Could not place every image on page {}: {}", pageNo, e.getMessage());
+            }
+
+            // PDF y grows upward, so the top of the page is the LARGEST y.
+            items.sort((a, b) -> Double.compare(b.y(), a.y()));
+            for (Placed item : items) out.append(item.line()).append("\n");
+        }
+        return out.toString();
+    }
+
+    /** A text line or an image marker, with where it sat on the page. */
+    private record Placed(double y, String line) {}
+
+    /** Captures each text line's vertical position instead of just its text. */
+    private static final class PositionalStripper extends PDFTextStripper {
+        private final List<Placed> sink;
+
+        PositionalStripper(List<Placed> sink) throws IOException {
+            this.sink = sink;
+            setSortByPosition(true);
+        }
+
+        @Override
+        protected void writeString(String text, List<TextPosition> positions) {
+            if (text != null && !text.isBlank() && !positions.isEmpty()) {
+                sink.add(new Placed(positions.get(0).getTextMatrix().getTranslateY(), text.strip()));
+            }
+        }
+    }
+
+    /** Walks a page's content stream to find where each image is drawn. */
+    private final class ImageLocator extends PDFStreamEngine {
+        private final List<Placed> sink;
+        private final List<String> saved;
+
+        ImageLocator(List<Placed> sink, List<String> saved) {
+            this.sink = sink;
+            this.saved = saved;
+
+            // Without these, the graphics state is never updated and every
+            // image reports the identity matrix — position 0,0 — which is
+            // exactly the silent failure this class exists to avoid. A bare
+            // PDFStreamEngine registers no operator processors at all; the
+            // matrix operators below are what make the CTM meaningful when a
+            // "Do" is finally reached.
+            addOperator(new org.apache.pdfbox.contentstream.operator.state.Save(this));
+            addOperator(new org.apache.pdfbox.contentstream.operator.state.Restore(this));
+            addOperator(new org.apache.pdfbox.contentstream.operator.state.Concatenate(this));
+            addOperator(new org.apache.pdfbox.contentstream.operator.state.SetMatrix(this));
+            addOperator(new org.apache.pdfbox.contentstream.operator.state.SetGraphicsStateParameters(this));
+        }
+
+        @Override
+        protected void processOperator(Operator operator, List<COSBase> operands) throws IOException {
+            if (!"Do".equals(operator.getName()) || operands.isEmpty()
+                    || !(operands.get(0) instanceof COSName name)) {
+                super.processOperator(operator, operands);
+                return;
+            }
+
+            PDResources pageResources = getResources();
+            PDXObject xobject = pageResources == null ? null : pageResources.getXObject(name);
+            if (!(xobject instanceof PDImageXObject image)) {
+                super.processOperator(operator, operands);
+                return;
+            }
+
+            try {
+                String fileName = UUID.randomUUID() + ".png";
+                ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+                ImageIO.write(image.getImage(), "png", bytes);
+                Files.write(imageDir.resolve(fileName), bytes.toByteArray());
+                saved.add(fileName);
+
+                // Sort by the image's vertical CENTRE.
+                //
+                // An image's CTM maps the unit square onto the placed rectangle,
+                // so translateY is the BOTTOM edge and the vertical scale is the
+                // height. Neither edge alone is reliable: the bottom files a
+                // figure under the question that follows it, while the top
+                // misfiles any figure whose upper edge overlaps the line above
+                // — measured at 5pt of overlap in a perfectly ordinary layout.
+                // The centre sits unambiguously between the question it belongs
+                // to and the next one, whatever the figure's height.
+                var ctm = getGraphicsState().getCurrentTransformationMatrix();
+                double centre = ctm.getTranslateY() + Math.abs(ctm.getScaleY()) / 2.0;
+                sink.add(new Placed(centre, IMAGE_MARKER + fileName));
+            } catch (IOException | RuntimeException e) {
+                log.warn("Could not save an image from the PDF: {}", e.getMessage());
+            }
+        }
+    }
+
 }

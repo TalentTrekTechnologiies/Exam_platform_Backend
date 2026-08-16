@@ -2,9 +2,11 @@ package com.Exam.Exam_System.controller;
 
 import com.Exam.Exam_System.Entity.Admin;
 import com.Exam.Exam_System.Entity.Exam;
+import com.Exam.Exam_System.Entity.Slot;
 import com.Exam.Exam_System.dto.PublicationStatus;
 import com.Exam.Exam_System.repository.AdminRepository;
 import com.Exam.Exam_System.repository.ExamRepository;
+import com.Exam.Exam_System.repository.SlotRepository;
 import com.Exam.Exam_System.security.AccessGuard;
 import com.Exam.Exam_System.security.CurrentUser;
 import com.Exam.Exam_System.service.AttemptService;
@@ -24,13 +26,19 @@ public class ExamController {
     private final AccessGuard accessGuard;
     private final AttemptService attemptService;
     private final PublicationService publicationService;
+    private final SlotRepository slotRepository;
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(ExamController.class);
 
     public ExamController(ExamRepository examRepository,
                           AdminRepository adminRepository,
                           CurrentUser currentUser,
                           AccessGuard accessGuard,
                           AttemptService attemptService,
-                          PublicationService publicationService) {
+                          PublicationService publicationService,
+                          SlotRepository slotRepository) {
+        this.slotRepository = slotRepository;
         this.examRepository = examRepository;
         this.adminRepository = adminRepository;
         this.currentUser = currentUser;
@@ -70,7 +78,30 @@ public class ExamController {
             }
         }
 
-        return examRepository.save(exam);
+        Exam saved = examRepository.save(exam);
+
+        // The exam's own start/end were previously decorative: candidate sign-in
+        // checks the SLOT window and nothing else, so an admin who set 9–10 here
+        // and then never opened the Slots screen had an exam nobody could enter,
+        // with nothing explaining why. Creating the matching slot up front makes
+        // the dates mean what they plainly appear to mean. More slots can still
+        // be added for a second sitting; this is the first one, not the only one.
+        if (saved.getStartDate() != null && saved.getEndDate() != null
+                && saved.getEndDate().isAfter(saved.getStartDate())) {
+            try {
+                Slot slot = new Slot();
+                slot.setExamId(saved.getId());
+                slot.setStartTime(saved.getStartDate());
+                slot.setEndTime(saved.getEndDate());
+                slotRepository.save(slot);
+            } catch (RuntimeException e) {
+                // An exam that exists without its slot is recoverable — the
+                // admin can add one — so this never fails the creation itself.
+                log.warn("Could not create the opening slot for exam {}: {}", saved.getId(), e.toString());
+            }
+        }
+
+        return saved;
     }
 
     /**
