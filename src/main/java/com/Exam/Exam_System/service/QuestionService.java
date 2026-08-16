@@ -62,6 +62,14 @@ public class QuestionService {
 
     @Transactional
     public Question addQuestion(Question question) {
+        // The exam's marking scheme has to reach questions added one at a time
+        // as well, not only imported ones. Wiring it into the import paths but
+        // not this one made the same paper mark differently depending on how
+        // its questions happened to be entered — the kind of inconsistency
+        // nobody notices until results are out.
+        if (question.getExamId() != null) {
+            applyExamDefaults(question, examRepository.findById(question.getExamId()).orElse(null));
+        }
         validate(question);
         return questionRepository.save(question);
     }
