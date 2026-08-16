@@ -269,7 +269,20 @@ public class QuestionService {
                 question.setOptionC(str(q.get("optionC")));
                 question.setOptionD(str(q.get("optionD")));
                 question.setCorrectAnswer(str(q.get("correctAnswer")));
-                question.setQuestionImage(str(q.get("questionImage")));
+                // The review screen sends back `images` (the list the parser
+                // produced, which a reviewer may have edited); a single
+                // `questionImage` only appears if something set it explicitly.
+                // Reading only the latter meant every extracted diagram was
+                // shown in the preview and then silently dropped on save — the
+                // import appeared to handle figures and actually discarded them.
+                String image = str(q.get("questionImage"));
+                if (image == null || image.isBlank()) {
+                    Object raw = q.get("images");
+                    if (raw instanceof List<?> list && !list.isEmpty()) {
+                        image = str(list.get(0));
+                    }
+                }
+                question.setQuestionImage(image);
 
                 if (q.get("marks") != null && !str(q.get("marks")).isBlank()) {
                     question.setMarks(Integer.parseInt(str(q.get("marks"))));
