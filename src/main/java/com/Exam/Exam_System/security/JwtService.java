@@ -66,11 +66,22 @@ public class JwtService {
         return build(adminId, AuthPrincipal.Role.ADMIN, email, null, adminTtl);
     }
 
+    /**
+     * Each sign-in gets its own session id, so two devices holding tokens for
+     * the same candidate are distinguishable. Signing in again is normal and
+     * expected after a crash; what this makes detectable is two of them writing
+     * to one attempt concurrently.
+     */
     public String issueStudentToken(Long studentId, String hallTicket, Long examId) {
-        return build(studentId, AuthPrincipal.Role.STUDENT, hallTicket, examId, studentTtl);
+        return build(studentId, AuthPrincipal.Role.STUDENT, hallTicket, examId, studentTtl,
+                java.util.UUID.randomUUID().toString());
     }
 
     private String build(Long id, AuthPrincipal.Role role, String label, Long examId, Duration ttl) {
+        return build(id, role, label, examId, ttl, null);
+    }
+
+    private String build(Long id, AuthPrincipal.Role role, String label, Long examId, Duration ttl, String session) {
         Date now = new Date();
         var builder = Jwts.builder()
                 .subject(String.valueOf(id))
@@ -80,6 +91,7 @@ public class JwtService {
                 .expiration(new Date(now.getTime() + ttl.toMillis()));
 
         if (examId != null) builder.claim("examId", examId);
+        if (session != null) builder.claim("sid", session);
         return builder.signWith(key).compact();
     }
 
@@ -96,8 +108,10 @@ public class JwtService {
             Long id = Long.valueOf(claims.getSubject());
             String label = claims.get("label", String.class);
             Number examId = claims.get("examId", Number.class);
+            String session = claims.get("sid", String.class);
 
-            return new AuthPrincipal(id, role, label, examId == null ? null : examId.longValue());
+            return new AuthPrincipal(id, role, label,
+                    examId == null ? null : examId.longValue(), session);
         } catch (JwtException | IllegalArgumentException e) {
             log.debug("Rejected token: {}", e.getMessage());
             return null;

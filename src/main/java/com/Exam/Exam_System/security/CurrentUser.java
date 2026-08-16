@@ -28,4 +28,9 @@ public class CurrentUser {
         if (principal.isAdmin()) throw new AccessDeniedException("Student access required.");
         return principal.id();
     }
+
+    /** Which sign-in this request belongs to. Null on tokens issued before sessions existed. */
+    public String session() {
+        return get().session();
+    }
 }

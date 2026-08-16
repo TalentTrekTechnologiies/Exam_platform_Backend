@@ -34,6 +34,10 @@ public class StudentController {
     private final CurrentUser currentUser;
     private final AccessGuard accessGuard;
     private final ProctoringService proctoringService;
+    private final SessionWatch sessionWatch;
+
+    private static final org.slf4j.Logger log =
+            org.slf4j.LoggerFactory.getLogger(StudentController.class);
 
     public StudentController(StudentService studentService,
                              SlotService slotService,
@@ -46,7 +50,9 @@ public class StudentController {
                              JwtService jwtService,
                              CurrentUser currentUser,
                              AccessGuard accessGuard,
-                             ProctoringService proctoringService) {
+                             ProctoringService proctoringService,
+                             SessionWatch sessionWatch) {
+        this.sessionWatch = sessionWatch;
         this.studentService = studentService;
         this.slotService = slotService;
         this.attemptService = attemptService;
@@ -222,6 +228,21 @@ public class StudentController {
                 currentUser.studentId(),
                 questionId,
                 optionObj == null ? null : optionObj.toString());
+
+        // Two sessions writing to one attempt within the same couple of minutes
+        // means this hall ticket is in two people's hands. Checked on the answer
+        // path because that is where the second person's activity actually shows
+        // up — they are there to answer, not to poll a clock. Raised once per
+        // attempt, and never allowed to fail the save itself: an integrity flag
+        // must not cost a legitimate candidate their answer.
+        try {
+            if (sessionWatch.observe(attemptId, currentUser.session())) {
+                proctoringService.record(attemptId, "CONCURRENT_SESSION", null,
+                        "This hall ticket was answering from two devices at the same time.");
+            }
+        } catch (Exception e) {
+            log.warn("Concurrent-session check failed for attempt {}: {}", attemptId, e.toString());
+        }
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("questionId", questionId);
