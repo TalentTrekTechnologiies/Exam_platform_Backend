@@ -1,8 +1,10 @@
 package com.Exam.Exam_System.service;
 
+import com.Exam.Exam_System.Entity.Exam;
 import com.Exam.Exam_System.Entity.Question;
 import com.Exam.Exam_System.Entity.Section;
 import com.Exam.Exam_System.dto.UploadReport;
+import com.Exam.Exam_System.repository.ExamRepository;
 import com.Exam.Exam_System.repository.QuestionRepository;
 import com.Exam.Exam_System.repository.SectionRepository;
 import com.Exam.Exam_System.util.CsvParser;
@@ -22,11 +24,35 @@ public class QuestionService {
 
     private final QuestionRepository questionRepository;
     private final SectionRepository sectionRepository;
+    private final ExamRepository examRepository;
 
     public QuestionService(QuestionRepository questionRepository,
-                           SectionRepository sectionRepository) {
+                           SectionRepository sectionRepository,
+                           ExamRepository examRepository) {
         this.questionRepository = questionRepository;
         this.sectionRepository = sectionRepository;
+        this.examRepository = examRepository;
+    }
+
+    /**
+     * Fills in the exam's own marking scheme for any question that didn't state
+     * one.
+     *
+     * A source document or CSV frequently omits marks entirely, and inventing a
+     * scheme out of nothing would be wrong. But the admin already stated their
+     * scheme on the Create Exam screen — falling back to it is plainly what
+     * they meant, and beats silently marking a 4-mark EAMCET paper at 1 mark a
+     * question with no penalty, which is what happened before: those settings
+     * reached the server and were dropped on the floor.
+     */
+    private void applyExamDefaults(Question q, Exam exam) {
+        if (exam == null) return;
+        if (q.getMarks() == null && exam.getDefaultMarks() != null) {
+            q.setMarks(exam.getDefaultMarks());
+        }
+        if (q.getNegativeMarks() == null && exam.getDefaultNegativeMarks() != null) {
+            q.setNegativeMarks(exam.getDefaultNegativeMarks());
+        }
     }
 
     @Transactional(readOnly = true)
@@ -134,6 +160,7 @@ public class QuestionService {
             throw new IllegalArgumentException("No file was uploaded.");
         }
 
+        Exam exam = examRepository.findById(examId).orElse(null);
         Map<String, Long> sectionsByName = new HashMap<>();
         for (Section s : sectionRepository.findByExamId(examId)) {
             if (s.getName() != null) sectionsByName.put(s.getName().trim().toLowerCase(), s.getId());
@@ -175,6 +202,7 @@ public class QuestionService {
                         q.setSectionId(resolveSection(examId, f.get(8), sectionsByName));
                     }
 
+                    applyExamDefaults(q, exam);
                     validate(q);
                     questionRepository.save(q);
                     report.recordSaved();
@@ -209,6 +237,7 @@ public class QuestionService {
             throw new IllegalArgumentException("No questions were submitted.");
         }
 
+        Exam exam = examRepository.findById(examId).orElse(null);
         Map<String, Long> sectionsByName = new HashMap<>();
         for (Section s : sectionRepository.findByExamId(examId)) {
             if (s.getName() != null) sectionsByName.put(s.getName().trim().toLowerCase(), s.getId());
@@ -246,6 +275,7 @@ public class QuestionService {
                     question.setSectionId(resolveSection(examId, sectionName, sectionsByName));
                 }
 
+                applyExamDefaults(question, exam);
                 validate(question);
                 questionRepository.save(question);
                 report.recordSaved();

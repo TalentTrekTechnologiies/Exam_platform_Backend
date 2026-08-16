@@ -47,6 +47,28 @@ public class Exam {
     @Column(name = "published_at")
     private LocalDateTime publishedAt;
 
+    /**
+     * This exam's default marking scheme, applied to any question that doesn't
+     * declare its own.
+     *
+     * These were previously collected on the Create Exam screen and then thrown
+     * away: the server had nowhere to put them, so they survived only in one
+     * browser's local storage. An admin who set "4 marks, −1 negative" and then
+     * imported a CSV or PDF got questions worth 1 mark with no penalty, with
+     * nothing to indicate their scheme had been discarded — a silent, and
+     * therefore expensive, mismatch between what was configured and what
+     * candidates were actually marked against.
+     *
+     * Nullable so an exam created before this existed keeps behaving exactly as
+     * it did; ScoringService's own fallbacks (1 mark, no penalty) still apply
+     * when both the question and the exam are silent.
+     */
+    @Column(name = "default_marks")
+    private Integer defaultMarks;
+
+    @Column(name = "default_negative_marks")
+    private Double defaultNegativeMarks;
+
     public Exam() {}
 
     public Long getId() {
@@ -127,4 +149,10 @@ public class Exam {
 
 	public LocalDateTime getPublishedAt() { return publishedAt; }
 	public void setPublishedAt(LocalDateTime publishedAt) { this.publishedAt = publishedAt; }
+
+	public Integer getDefaultMarks() { return defaultMarks; }
+	public void setDefaultMarks(Integer defaultMarks) { this.defaultMarks = defaultMarks; }
+
+	public Double getDefaultNegativeMarks() { return defaultNegativeMarks; }
+	public void setDefaultNegativeMarks(Double defaultNegativeMarks) { this.defaultNegativeMarks = defaultNegativeMarks; }
 }
