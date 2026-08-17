@@ -50,7 +50,7 @@ services:
       db:
         condition: service_healthy
     environment:
-      DB_URL: jdbc:mysql://db:3306/exam_system?useSSL=false&serverTimezone=Asia/Kolkata
+      DB_URL: jdbc:mysql://db:3306/exam_system?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Kolkata
       DB_USER: root
       DB_PASSWORD: ${DB_PASSWORD}
       DDL_AUTO: ${DDL_AUTO:-validate}

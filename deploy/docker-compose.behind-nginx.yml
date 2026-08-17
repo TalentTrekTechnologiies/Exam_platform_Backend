@@ -62,7 +62,19 @@ services:
       db:
         condition: service_healthy
     environment:
-      DB_URL: jdbc:mysql://db:3306/exam_system?useSSL=false&serverTimezone=Asia/Kolkata
+      # allowPublicKeyRetrieval is required by MySQL 8.4, which authenticates
+      # with caching_sha2_password. On an unencrypted connection the driver must
+      # fetch the server's public key to complete the handshake, and it refuses
+      # to do so unless told this is expected — the failure is a blunt
+      # "Public Key Retrieval is not allowed" with no hint as to the cause.
+      #
+      # The usual objection is that a man in the middle could substitute their
+      # own key during that fetch. There is no middle here to be in: `db` is
+      # only resolvable on this compose network, its port is never published to
+      # the host let alone the internet, and the packets never leave the
+      # machine. Turning on TLS for a link that cannot be observed would add
+      # certificate management for no gain.
+      DB_URL: jdbc:mysql://db:3306/exam_system?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Kolkata
       DB_USER: root
       DB_PASSWORD: ${DB_PASSWORD}
       DDL_AUTO: ${DDL_AUTO:-update}
