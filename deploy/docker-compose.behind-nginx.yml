@@ -1,0 +1,92 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  For a server that ALREADY runs nginx and another site.
+#
+#      docker compose -f docker-compose.behind-nginx.yml up -d --build
+#
+#  This is the arrangement for ksrmce.ac.in/online: the college website already
+#  owns ports 80 and 443, so this stack must not go near them.
+#
+#  How it differs from docker-compose.yml, and why:
+#
+#    · No nginx container. The standard file ships one bound to port 80, which
+#      on this host is the live college site. Two things cannot hold one port;
+#      the host's nginx stays in charge and proxies through to the app.
+#
+#    · One app instance, not three. Three exist in the standard file to sit
+#      behind that bundled load balancer. Here the host nginx is the entry
+#      point, and a single instance measured comfortably past the numbers this
+#      college needs. Scale by adding instances and an nginx upstream block if
+#      a sitting ever outgrows it — not before.
+#
+#    · The app publishes on 127.0.0.1 only. Binding 0.0.0.0:8080 would put the
+#      exam API straight on the public internet beside the site, bypassing
+#      nginx and its TLS. Loopback means the only way in is through nginx.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: exam-platform
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: exam_system
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      # MUST match the app's timezone below.
+      #
+      # The exam clock is written by MySQL, not Java: AttemptService sets
+      # end_time = DATE_ADD(NOW(), INTERVAL duration MINUTE) using the
+      # DATABASE's clock, while the remaining-time endpoint compares it against
+      # the APP's clock. If the two disagree, the gap lands directly on every
+      # candidate's timer. This host runs UTC, so leaving it to inherit would
+      # mean a candidate starting their exam and being told time had run out.
+      TZ: ${TZ:-Asia/Kolkata}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./mysql-tuning.cnf:/etc/mysql/conf.d/tuning.cnf:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Never published to the host: only the app container reaches the database.
+    expose:
+      - "3306"
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_URL: jdbc:mysql://db:3306/exam_system?useSSL=false&serverTimezone=Asia/Kolkata
+      DB_USER: root
+      DB_PASSWORD: ${DB_PASSWORD}
+      DDL_AUTO: ${DDL_AUTO:-update}
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-50}
+      TOMCAT_THREADS: ${TOMCAT_THREADS:-300}
+      JWT_SECRET: ${JWT_SECRET}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      CANDIDATE_BASE_URL: ${CANDIDATE_BASE_URL}
+      ALLOW_REGISTRATION: ${ALLOW_REGISTRATION:-false}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD}
+      SEED_ADMIN_COLLEGE: ${SEED_ADMIN_COLLEGE}
+      SEED_ADMIN_CODE: ${SEED_ADMIN_CODE}
+      MAIL_ENABLED: ${MAIL_ENABLED:-false}
+      TZ: ${TZ:-Asia/Kolkata}
+    volumes:
+      # Question diagrams and college logos are written at runtime, so they
+      # live on a volume rather than inside the image — a rebuild must not
+      # erase a paper's figures.
+      - uploads:/app/uploads
+    ports:
+      # Loopback only. nginx on the host proxies /online/api/ to this.
+      - "127.0.0.1:8080:8080"
+
+volumes:
+  db-data:
+  uploads:
