@@ -16,6 +16,18 @@ services:
     environment:
       MYSQL_DATABASE: exam_system
       MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      # MUST match the app's timezone below.
+      #
+      # The exam clock is written by MySQL, not Java: AttemptService sets
+      # end_time = DATE_ADD(NOW(), INTERVAL duration MINUTE) using the
+      # DATABASE's clock, while the remaining-time endpoint compares it against
+      # the APP's clock. If the two disagree the difference lands directly on
+      # every candidate's timer — on a UTC host with an IST app, a candidate
+      # would start their exam and be told the time had already run out.
+      #
+      # A host left on UTC is the normal case for a VPS, so this cannot be left
+      # to inherit from the host.
+      TZ: ${TZ:-Asia/Kolkata}
     volumes:
       - db-data:/var/lib/mysql
       - ./mysql-tuning.cnf:/etc/mysql/conf.d/tuning.cnf:ro
