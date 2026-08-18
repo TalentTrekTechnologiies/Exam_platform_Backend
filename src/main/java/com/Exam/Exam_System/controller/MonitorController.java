@@ -1,6 +1,7 @@
 package com.Exam.Exam_System.controller;
 
 import com.Exam.Exam_System.security.AccessGuard;
+import com.Exam.Exam_System.service.ProctorFrameService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
@@ -8,6 +9,9 @@ import java.sql.Timestamp;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.*;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 
 /**
  * Live view of a sitting in progress.
@@ -22,6 +26,8 @@ import java.util.*;
 @RequestMapping("/admin/monitor")
 public class MonitorController {
 
+    private final ProctorFrameService proctorFrameService;
+
     /**
      * A candidate is treated as having dropped when their attempt is live but
      * nothing has reached the server recently. Answers and clock polls both
@@ -33,7 +39,9 @@ public class MonitorController {
     private final JdbcTemplate jdbc;
     private final AccessGuard accessGuard;
 
-    public MonitorController(JdbcTemplate jdbc, AccessGuard accessGuard) {
+    public MonitorController(JdbcTemplate jdbc, AccessGuard accessGuard,
+                             ProctorFrameService proctorFrameService) {
+        this.proctorFrameService = proctorFrameService;
         this.jdbc = jdbc;
         this.accessGuard = accessGuard;
     }
@@ -144,4 +152,41 @@ public class MonitorController {
         out.put("candidates", candidates);
         return out;
     }
+
+    /**
+     * One candidate's newest camera frame.
+     *
+     * Guarded through the exam, not the attempt id alone: an invigilator may
+     * only see candidates sitting an exam their own institution owns.
+     *
+     * Marked no-store because these are a live view, not a record. A cached
+     * copy in a proxy would both show a stale seat and leave a candidate's face
+     * somewhere nobody intended it to be.
+     */
+    @GetMapping(value = "/{examId}/frame/{attemptId}", produces = MediaType.IMAGE_JPEG_VALUE)
+    public ResponseEntity<byte[]> candidateFrame(@PathVariable Long examId,
+                                                 @PathVariable Long attemptId) {
+        accessGuard.requireOwnedExam(examId);
+        if (!attemptBelongsToExam(attemptId, examId)) {
+            return ResponseEntity.notFound().build();
+        }
+        byte[] frame = proctorFrameService.read(attemptId);
+        if (frame == null) return ResponseEntity.notFound().build();
+
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CACHE_CONTROL, "no-store, must-revalidate")
+                .header(HttpHeaders.PRAGMA, "no-cache")
+                .contentType(MediaType.IMAGE_JPEG)
+                .body(frame);
+    }
+
+    /** Stops an attempt id from one exam being used to view another's camera. */
+    private boolean attemptBelongsToExam(Long attemptId, Long examId) {
+        Long found = jdbc.query(
+                "SELECT exam_id FROM attempts WHERE id = ?",
+                rs -> rs.next() ? rs.getLong("exam_id") : null,
+                attemptId);
+        return examId.equals(found);
+    }
+
 }

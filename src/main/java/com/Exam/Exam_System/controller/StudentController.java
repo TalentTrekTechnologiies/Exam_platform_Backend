@@ -14,6 +14,7 @@ import com.Exam.Exam_System.service.*;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.time.LocalDateTime;
 import java.util.*;
@@ -35,6 +36,7 @@ public class StudentController {
     private final AccessGuard accessGuard;
     private final ProctoringService proctoringService;
     private final SessionWatch sessionWatch;
+    private final ProctorFrameService proctorFrameService;
 
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(StudentController.class);
@@ -51,8 +53,10 @@ public class StudentController {
                              CurrentUser currentUser,
                              AccessGuard accessGuard,
                              ProctoringService proctoringService,
-                             SessionWatch sessionWatch) {
+                             SessionWatch sessionWatch,
+                             ProctorFrameService proctorFrameService) {
         this.sessionWatch = sessionWatch;
+        this.proctorFrameService = proctorFrameService;
         this.studentService = studentService;
         this.slotService = slotService;
         this.attemptService = attemptService;
@@ -206,6 +210,32 @@ public class StudentController {
             if (a.getSelectedOption() != null) responses.put(a.getQuestionId(), a.getSelectedOption());
         }
         return responses;
+    }
+
+
+    /**
+     * The candidate's newest camera frame, for the invigilator's live view.
+     *
+     * Scoped by the attempt's own student id, so a candidate can only ever put
+     * a picture against their own seat. Always answers 200: a camera that
+     * stutters is the invigilator's problem to notice, never an error thrown
+     * into the middle of somebody's exam.
+     */
+    @PostMapping("/proctor/frame")
+    public Map<String, Object> uploadFrame(@RequestParam("attemptId") Long attemptId,
+                                           @RequestParam("frame") MultipartFile frame) {
+        boolean stored = false;
+        try {
+            // The attempt has to be this candidate's own, or a frame could be
+            // put against someone else's seat.
+            var attempt = attemptService.requireAttempt(attemptId);
+            if (attempt != null && currentUser.studentId().equals(attempt.getStudentId())) {
+                stored = proctorFrameService.store(attemptId, frame);
+            }
+        } catch (Exception e) {
+            log.debug("Frame upload failed for attempt {}: {}", attemptId, e.toString());
+        }
+        return Map.of("stored", stored);
     }
 
     @PostMapping("/answer")
