@@ -3,6 +3,8 @@ package com.Exam.Exam_System.controller;
 import com.Exam.Exam_System.Entity.Question;
 import com.Exam.Exam_System.dto.UploadReport;
 import com.Exam.Exam_System.security.AccessGuard;
+import com.Exam.Exam_System.Entity.Exam;
+import com.Exam.Exam_System.dto.ParsedQuestion;
 import com.Exam.Exam_System.service.DocumentImportService;
 import com.Exam.Exam_System.service.QuestionService;
 import org.springframework.web.bind.annotation.*;
@@ -82,8 +84,26 @@ public class QuestionController {
     @PostMapping("/import/preview")
     public DocumentImportService.ImportPreview previewDocument(@RequestParam("file") MultipartFile file,
                                                                @RequestParam Long examId) {
-        accessGuard.requireOwnedExam(examId);
-        return documentImportService.parse(file);
+        Exam exam = accessGuard.requireOwnedExam(examId);
+        DocumentImportService.ImportPreview preview = documentImportService.parse(file);
+
+        // Show the marks these questions will actually carry.
+        //
+        // Most papers do not print "[4 marks]" against every question, so the
+        // parser rightly leaves marks blank — and the exam's own scheme was
+        // filled in later, at save time. The review screen therefore showed an
+        // empty marks column for a paper that would be marked perfectly well,
+        // which reads as the scheme having been ignored. Applying it here makes
+        // the screen show what will be saved, and it stays editable.
+        for (ParsedQuestion q : preview.questions()) {
+            if (q.getMarks() == null && exam.getDefaultMarks() != null) {
+                q.setMarks(exam.getDefaultMarks());
+            }
+            if (q.getNegativeMarks() == null && exam.getDefaultNegativeMarks() != null) {
+                q.setNegativeMarks(exam.getDefaultNegativeMarks());
+            }
+        }
+        return preview;
     }
 
     /**
