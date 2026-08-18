@@ -69,6 +69,33 @@ public class Exam {
     @Column(name = "default_negative_marks")
     private Double defaultNegativeMarks;
 
+
+    /**
+     * The sittings requested when this exam was created.
+     *
+     * Request-only, and @Transient so JPA never tries to store it: slots are
+     * rows of their own. It exists so an exam and its sittings arrive together
+     * — a college running a morning and an evening batch should say so once,
+     * rather than create the exam and then go hunting for a separate screen.
+     */
+    @Transient
+    private java.util.List<SlotWindow> slots;
+
+    /** One requested sitting. */
+    public static class SlotWindow {
+        private LocalDateTime startTime;
+        private LocalDateTime endTime;
+
+        public LocalDateTime getStartTime() { return startTime; }
+        public void setStartTime(LocalDateTime v) { this.startTime = v; }
+
+        public LocalDateTime getEndTime() { return endTime; }
+        public void setEndTime(LocalDateTime v) { this.endTime = v; }
+    }
+
+    public java.util.List<SlotWindow> getSlots() { return slots; }
+    public void setSlots(java.util.List<SlotWindow> slots) { this.slots = slots; }
+
     public Exam() {}
 
     public Long getId() {

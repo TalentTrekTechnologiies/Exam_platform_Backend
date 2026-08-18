@@ -86,19 +86,38 @@ public class ExamController {
         // with nothing explaining why. Creating the matching slot up front makes
         // the dates mean what they plainly appear to mean. More slots can still
         // be added for a second sitting; this is the first one, not the only one.
-        if (saved.getStartDate() != null && saved.getEndDate() != null
-                && saved.getEndDate().isAfter(saved.getStartDate())) {
-            try {
+        try {
+            if (exam.getSlots() != null && !exam.getSlots().isEmpty()) {
+                // Sittings stated explicitly: a morning and an evening batch,
+                // say. Create exactly those and no blanket one over the top,
+                // which would let every candidate sit at any hour of the day.
+                int made = 0;
+                for (Exam.SlotWindow window : exam.getSlots()) {
+                    if (window == null || window.getStartTime() == null || window.getEndTime() == null) continue;
+                    if (!window.getEndTime().isAfter(window.getStartTime())) continue;
+                    Slot slot = new Slot();
+                    slot.setExamId(saved.getId());
+                    slot.setStartTime(window.getStartTime());
+                    slot.setEndTime(window.getEndTime());
+                    slotRepository.save(slot);
+                    made++;
+                }
+                if (made > 0) return saved;
+                // Nothing usable in the list; fall through to the single window.
+            }
+
+            if (saved.getStartDate() != null && saved.getEndDate() != null
+                    && saved.getEndDate().isAfter(saved.getStartDate())) {
                 Slot slot = new Slot();
                 slot.setExamId(saved.getId());
                 slot.setStartTime(saved.getStartDate());
                 slot.setEndTime(saved.getEndDate());
                 slotRepository.save(slot);
-            } catch (RuntimeException e) {
-                // An exam that exists without its slot is recoverable — the
-                // admin can add one — so this never fails the creation itself.
-                log.warn("Could not create the opening slot for exam {}: {}", saved.getId(), e.toString());
             }
+        } catch (RuntimeException e) {
+            // An exam that exists without its slots is recoverable - the admin
+            // can add them - so this never fails the creation itself.
+            log.warn("Could not create the sittings for exam {}: {}", saved.getId(), e.toString());
         }
 
         return saved;
