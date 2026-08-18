@@ -214,6 +214,29 @@ public class RosterImportService {
                 nameCol = 0;
                 warnings.add("Columns appear to be name first, then hall ticket — check the preview.");
             }
+        } else {
+            // A single column is either a list of hall tickets or a list of
+            // names, and the two need opposite treatment. Assuming tickets — as
+            // this did — turns a plain list of names into rows that all say
+            // "No name in this row", so a college holding only names could not
+            // upload its roster at all.
+            //
+            // Decided from the values rather than from one row, because a
+            // person's name occasionally does look like an identifier.
+            int looksTicket = 0, counted = 0;
+            for (List<String> row : table) {
+                String value = cell(row, 0);
+                if (value.isBlank()) continue;
+                counted++;
+                if (LOOKS_LIKE_TICKET.matcher(value).matches()) looksTicket++;
+                if (counted >= 25) break;
+            }
+            if (counted > 0 && looksTicket * 2 < counted) {
+                nameCol = 0;
+                ticketCol = -1;                       // cell() reads this as absent
+                warnings.add("This list has candidate names but no hall tickets. "
+                        + "Choose how to issue them below.");
+            }
         }
 
         Set<String> seen = new HashSet<>();
@@ -243,7 +266,13 @@ public class RosterImportService {
         int usable = (int) rows.stream().filter(RosterRow::isUsable).count();
         int problems = rows.size() - usable;
 
-        if (usable == 0) {
+        // A list of names with no tickets is not a broken file - the tickets
+        // are simply about to be issued, so saying "no usable rows" would send
+        // the admin looking for a problem that isn't there.
+        boolean onlyMissingTickets = usable == 0 && !rows.isEmpty()
+                && rows.stream().allMatch(r -> r.hallTicket().isBlank() && !r.name().isBlank());
+
+        if (usable == 0 && !onlyMissingTickets) {
             warnings.add("No usable rows were found. The file should have a hall ticket "
                     + "and a candidate name in each row.");
         }
