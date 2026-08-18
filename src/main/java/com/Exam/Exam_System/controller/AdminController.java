@@ -28,10 +28,13 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 @RestController
 @RequestMapping("/admin")
 public class AdminController {
+
+    private final JdbcTemplate jdbc;
 
     private final AdminRepository adminRepository;
     private final ExamRepository examRepository;
@@ -62,7 +65,9 @@ public class AdminController {
                            AccessGuard accessGuard,
                            FileStorageService fileStorage,
                            HallTicketService hallTicketService,
-                           RosterImportService rosterImportService) {
+                           RosterImportService rosterImportService,
+                           JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
         this.adminRepository = adminRepository;
         this.examRepository = examRepository;
         this.studentService = studentService;
@@ -387,6 +392,125 @@ public class AdminController {
     @GetMapping("/students")
     public List<Map<String, Object>> getStudents(@RequestParam(required = false) Long examId) {
         return studentRows(examId);
+    }
+
+
+    /**
+     * The people on this college's books, one row each.
+     *
+     * The roster listing returns one row per exam a candidate sits, which is
+     * right for "who is in this exam" and wrong for "who do we have": a student
+     * taking three exams appeared three times, and looked like sloppy data
+     * entry rather than one person with a history.
+     *
+     * Each row carries the exams that student is already in, so an admin
+     * assigning them to a new one can see at a glance who is already covered.
+     */
+    @GetMapping("/students/registry")
+    public List<Map<String, Object>> studentRegistry(@RequestParam(required = false) String search) {
+        Long adminId = currentUser.adminId();
+        String like = (search == null || search.isBlank()) ? null : "%" + search.trim().toLowerCase() + "%";
+
+        String sql = """
+                SELECT s.id, s.hall_ticket, s.name,
+                       e.id AS exam_id, e.title AS exam_title
+                  FROM students s
+                  LEFT JOIN exam_student es ON es.student_id = s.id
+                  LEFT JOIN exams e ON e.id = es.exam_id
+                 WHERE s.admin_id = ?
+                   AND (? IS NULL OR LOWER(s.hall_ticket) LIKE ? OR LOWER(s.name) LIKE ?)
+                 ORDER BY s.hall_ticket, e.id
+                """;
+
+        Map<Long, Map<String, Object>> people = new LinkedHashMap<>();
+        jdbc.query(sql, rs -> {
+            long id = rs.getLong("id");
+            Map<String, Object> person = people.computeIfAbsent(id, key -> {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("studentId", key);
+                try {
+                    row.put("hallTicket", rs.getString("hall_ticket"));
+                    row.put("name", rs.getString("name"));
+                } catch (java.sql.SQLException e) {
+                    throw new IllegalStateException(e);
+                }
+                row.put("exams", new ArrayList<Map<String, Object>>());
+                return row;
+            });
+            long examId = rs.getLong("exam_id");
+            if (!rs.wasNull()) {
+                @SuppressWarnings("unchecked")
+                List<Map<String, Object>> exams = (List<Map<String, Object>>) person.get("exams");
+                Map<String, Object> exam = new LinkedHashMap<>();
+                exam.put("examId", examId);
+                exam.put("examTitle", rs.getString("exam_title"));
+                exams.add(exam);
+            }
+        }, adminId, like, like, like);
+
+        return new ArrayList<>(people.values());
+    }
+
+    /**
+     * Puts students the college already holds into another exam.
+     *
+     * Without this the only way to enrol a returning candidate was to upload
+     * their details again, which created a second roster row for the same
+     * person and made the student list look full of duplicates. A candidate is
+     * entered once and sits as many exams as they are assigned to.
+     */
+    @PostMapping("/students/assign")
+    public UploadReport assignExisting(@RequestBody Map<String, Object> request) {
+        Long examId = Long.valueOf(String.valueOf(request.get("examId")));
+        Long slotId = Long.valueOf(String.valueOf(request.get("slotId")));
+
+        accessGuard.requireOwnedExam(examId);
+        var slot = accessGuard.requireOwnedSlot(slotId);
+        if (!slot.getExamId().equals(examId)) {
+            throw new IllegalArgumentException("That slot belongs to a different exam.");
+        }
+
+        if (!(request.get("studentIds") instanceof List<?> raw) || raw.isEmpty()) {
+            throw new IllegalArgumentException("No students were chosen.");
+        }
+
+        UploadReport report = new UploadReport();
+        Long adminId = currentUser.adminId();
+        int line = 0;
+
+        for (Object o : raw) {
+            line++;
+            Long studentId;
+            try {
+                studentId = Long.valueOf(String.valueOf(o));
+            } catch (NumberFormatException e) {
+                report.recordError(line, "Not a candidate.", String.valueOf(o));
+                continue;
+            }
+
+            // Checked against this college's own students, so ids cannot be
+            // guessed to pull another institution's candidates into an exam.
+            Integer owned = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM students WHERE id = ? AND admin_id = ?",
+                    Integer.class, studentId, adminId);
+            if (owned == null || owned == 0) {
+                report.recordError(line, "That candidate is not on your roll.", String.valueOf(studentId));
+                continue;
+            }
+
+            Integer already = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM exam_student WHERE student_id = ? AND exam_id = ?",
+                    Integer.class, studentId, examId);
+            if (already != null && already > 0) {
+                report.recordError(line, "Already assigned to this exam.", String.valueOf(studentId));
+                continue;
+            }
+
+            jdbc.update("INSERT INTO exam_student (student_id, exam_id, slot_id) VALUES (?, ?, ?)",
+                    studentId, examId, slotId);
+            report.recordSaved();
+        }
+        return report;
     }
 
     /** Dashboard headline count — counted in the database, not by loading rows. */
