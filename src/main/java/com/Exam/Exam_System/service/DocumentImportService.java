@@ -72,6 +72,55 @@ public class DocumentImportService {
             Pattern.compile("[\\[(]?\\s*(?:marks?\\s*[:\\-]?\\s*)?(\\d{1,2})\\s*marks?\\s*[\\])]?",
                     Pattern.CASE_INSENSITIVE);
 
+    // ── Board answer-key papers (APSCHE / TCS iON and the like) ─────────────
+    //
+    // A different beast from a typed question paper. The examining body
+    // publishes the paper with every question and option rendered as a picture
+    // — mathematics, chemical structures, and a second script beside English —
+    // leaving only metadata as real text. The generic parser finds nothing in
+    // it: there are no "A)" options to match, and the option numbers "1." to
+    // "4." look exactly like question numbers, so it reads a 160-question
+    // paper as 640 empty questions.
+    //
+    // These papers are, however, rigidly structured, and that structure is
+    // text. Recognising it recovers the numbering, marks, sections, artwork
+    // and — via the coloured glyphs — the answer key.
+
+    /** "Question Number : 12 Question Id : 6404... Question Type : MCQ ..." */
+    private static final Pattern BOARD_QUESTION =
+            Pattern.compile("^\\s*Question\\s+Number\\s*:\\s*(\\d{1,4})\\b.*$",
+                    Pattern.CASE_INSENSITIVE);
+
+    /** "Correct Marks : 1 Wrong Marks : 0" - the per-question marking scheme. */
+    private static final Pattern BOARD_MARKS =
+            Pattern.compile("^\\s*Correct\\s+Marks\\s*:\\s*(-?[\\d.]+)\\s+Wrong\\s+Marks\\s*:\\s*(-?[\\d.]+)\\s*$",
+                    Pattern.CASE_INSENSITIVE);
+
+    /** The "Options :" heading that separates a stem from its choices. */
+    private static final Pattern BOARD_OPTIONS_HEADER =
+            Pattern.compile("^\\s*Options\\s*:\\s*$", Pattern.CASE_INSENSITIVE);
+
+    /** A bare "1." to "4." standing alone - one of the four choices. */
+    private static final Pattern BOARD_OPTION_NUMBER =
+            Pattern.compile("^\\s*([1-4])\\s*[.)]\\s*$");
+
+    /** "Section Id : 640411237" - the line that follows a section name. */
+    private static final Pattern BOARD_SECTION_ID =
+            Pattern.compile("^\\s*Section\\s+Id\\s*:.*$", Pattern.CASE_INSENSITIVE);
+
+    /** Metadata lines that are noise once their meaning has been taken. */
+    private static final Pattern BOARD_NOISE =
+            Pattern.compile("^\\s*(?:Display\\s+Question\\s+Number|Question\\s+Id"
+                    + "|Section\\s+Number|Section\\s+type|Mandatory\\s+or\\s+Optional"
+                    + "|Number\\s+of\\s+Questions|Section\\s+Marks|Sub-Section"
+                    + "|Maximum\\s+Instruction\\s+Time|Question\\s+Shuffling|Group\\s"
+                    + "|Break\\s+time|Show\\s|Edit\\s|Change\\s|Help\\s+Button"
+                    + "|Display\\s+Marks|Share\\s+Answer|Duration|Total\\s+Marks"
+                    + "|Creation\\s+Date|Subject\\s+Name|Question\\s+Paper\\s+Name"
+                    + "|Notations|Options)\\s*:.*$", Pattern.CASE_INSENSITIVE);
+
+    private static final String[] LETTERS_ABCD = {"A", "B", "C", "D"};
+
     private final Path imageDir = Paths.get("uploads").toAbsolutePath().normalize();
 
     /** Everything a review screen needs: the proposals plus how the parse went. */
@@ -116,6 +165,12 @@ public class DocumentImportService {
                             + "would need optical character recognition, which this import does not do.");
         }
 
+        // A board answer-key paper needs a parser built for its layout; the
+        // generic one reads its option numbers as question numbers and returns
+        // hundreds of empty questions.
+        if (looksLikeBoardPaper(text)) {
+            return buildFromBoardPaper(text, file.getOriginalFilename());
+        }
         return build(text, images, file.getOriginalFilename());
     }
 
@@ -285,6 +340,189 @@ public class DocumentImportService {
         into.add(q);
     }
 
+
+    /**
+     * Is this one of the board's published answer-key papers?
+     *
+     * Deliberately demanding: several numbered question headers AND the marking
+     * line. A stray "Question Number :" in an ordinary paper's preamble must not
+     * divert it down a parser built for a layout it does not have.
+     */
+    private static boolean looksLikeBoardPaper(String text) {
+        int headers = 0;
+        boolean marks = false;
+        for (String raw : text.split("\\r?\\n")) {
+            String line = raw.strip();
+            if (BOARD_QUESTION.matcher(line).matches()) headers++;
+            else if (!marks && BOARD_MARKS.matcher(line).matches()) marks = true;
+            if (headers >= 3 && marks) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Reads a board answer-key paper.
+     *
+     * Works on the line array rather than streaming, because the answer glyph
+     * and its option number are printed side by side: sorted top-down they land
+     * adjacent, but which comes first depends on sub-point differences in their
+     * vertical placement. Looking either side of the number settles it without
+     * depending on that coin-flip.
+     */
+    private ImportPreview buildFromBoardPaper(String text, String fileName) {
+        String[] lines = text.split("\\r?\\n");
+        List<ParsedQuestion> questions = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+
+        ParsedQuestion current = null;
+        String currentSection = null;
+        String previousLine = null;
+        List<String> pendingImages = new ArrayList<>();
+        boolean inOptions = false;
+        int keysFound = 0;
+
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i].strip();
+            if (line.isEmpty()) continue;
+
+            // A section name is the heading printed directly above its id.
+            if (BOARD_SECTION_ID.matcher(line).matches()) {
+                if (previousLine != null && !previousLine.isBlank()
+                        && previousLine.length() <= 40 && !previousLine.contains(":")
+                        && !previousLine.startsWith(IMAGE_MARKER)) {
+                    currentSection = previousLine;
+                }
+                previousLine = line;
+                continue;
+            }
+
+            Matcher header = BOARD_QUESTION.matcher(line);
+            if (header.matches()) {
+                if (current != null) finishBoardQuestion(current, questions);
+                current = new ParsedQuestion();
+                current.setSourceNumber(Integer.parseInt(header.group(1)));
+                current.setSectionName(currentSection);
+                pendingImages.clear();
+                inOptions = false;
+                previousLine = line;
+                continue;
+            }
+
+            if (current == null) { previousLine = line; continue; }
+
+            Matcher marks = BOARD_MARKS.matcher(line);
+            if (marks.matches()) {
+                try {
+                    current.setMarks((int) Math.round(Double.parseDouble(marks.group(1))));
+                    // Published as a positive "wrong marks" figure; stored as the
+                    // magnitude of the penalty, which is what scoring subtracts.
+                    current.setNegativeMarks(Math.abs(Double.parseDouble(marks.group(2))));
+                } catch (NumberFormatException ignored) {
+                    // A malformed marking line is not worth losing the question over.
+                }
+                previousLine = line;
+                continue;
+            }
+
+            if (BOARD_OPTIONS_HEADER.matcher(line).matches()) {
+                // Everything gathered up to here is the question itself.
+                current.getImages().addAll(pendingImages);
+                pendingImages.clear();
+                inOptions = true;
+                previousLine = line;
+                continue;
+            }
+
+            if (line.startsWith(IMAGE_MARKER)) {
+                pendingImages.add(line.substring(IMAGE_MARKER.length()).strip());
+                continue;
+            }
+
+            // Consumed through the lookaround below, never on their own.
+            if (line.equals(TICK_MARKER) || line.equals(CROSS_MARKER)) continue;
+
+            Matcher optionNo = BOARD_OPTION_NUMBER.matcher(line);
+            if (optionNo.matches() && inOptions) {
+                int index = Integer.parseInt(optionNo.group(1));
+                if (!pendingImages.isEmpty()) {
+                    setOptionImage(current, index, pendingImages.get(0));
+                    pendingImages.clear();
+                }
+                if (tickSitsBeside(lines, i)) {
+                    current.setCorrectAnswer(LETTERS_ABCD[index - 1]);
+                    keysFound++;
+                }
+                previousLine = line;
+                continue;
+            }
+
+            if (BOARD_NOISE.matcher(line).matches()) { previousLine = line; continue; }
+
+            // Any remaining text is part of the question, for the rare paper
+            // that prints its stem as text while its options are pictures.
+            if (!inOptions) {
+                String existing = current.getQuestionText();
+                current.setQuestionText(existing == null ? line : existing + " " + line);
+            }
+            previousLine = line;
+        }
+        if (current != null) finishBoardQuestion(current, questions);
+
+        warnings.add(questions.size() + " question(s) read from a board answer-key paper. "
+                + "Questions and options in this format are pictures rather than text, so they are "
+                + "imported as images and appear to candidates exactly as printed.");
+        if (keysFound > 0) {
+            warnings.add(keysFound + " answer key(s) were read from the tick marks beside the "
+                    + "correct options. Spot-check a few against the paper before saving.");
+        }
+        int missingKeys = questions.size() - keysFound;
+        if (missingKeys > 0) {
+            warnings.add(missingKeys + " question(s) had no tick mark detected and need their "
+                    + "correct answer set during review.");
+        }
+
+        int usable = (int) questions.stream().filter(ParsedQuestion::isUsable).count();
+        int attention = (int) questions.stream().filter(q -> !q.getIssues().isEmpty()).count();
+        log.info("Parsed {} board question(s) from {} - {} carried an answer key.",
+                questions.size(), fileName, keysFound);
+        return new ImportPreview(questions, usable, attention, warnings, fileName);
+    }
+
+    /** True when a tick is printed immediately either side of the option number. */
+    private static boolean tickSitsBeside(String[] lines, int index) {
+        for (int at : new int[]{index - 1, index + 1}) {
+            if (at >= 0 && at < lines.length && lines[at].strip().equals(TICK_MARKER)) return true;
+        }
+        return false;
+    }
+
+    private static void setOptionImage(ParsedQuestion q, int index, String file) {
+        switch (index) {
+            case 1 -> q.setOptionAImage(file);
+            case 2 -> q.setOptionBImage(file);
+            case 3 -> q.setOptionCImage(file);
+            case 4 -> q.setOptionDImage(file);
+            default -> { }
+        }
+    }
+
+    /** Records what a reviewer must fix, without inventing anything. */
+    private static void finishBoardQuestion(ParsedQuestion q, List<ParsedQuestion> into) {
+        boolean hasStem = (q.getQuestionText() != null && !q.getQuestionText().isBlank())
+                || !q.getImages().isEmpty();
+        if (!hasStem) q.addIssue("No question content was found for this number.");
+
+        int options = 0;
+        if (q.getOptionAImage() != null) options++;
+        if (q.getOptionBImage() != null) options++;
+        if (q.getOptionCImage() != null) options++;
+        if (q.getOptionDImage() != null) options++;
+        if (options < 4) q.addIssue("Only " + options + " of 4 options could be read.");
+
+        if (q.getCorrectAnswer() == null) q.addIssue("No answer key was detected - set it during review.");
+        into.add(q);
+    }
+
     // -- Reading a document in ORDER ----------------------------------------
     //
     // Text and images used to be extracted in two separate passes, which threw
@@ -298,6 +536,17 @@ public class DocumentImportService {
     // attach each one to the question it is sitting next to.
 
     static final String IMAGE_MARKER = "\u0000IMG:";
+
+    /**
+     * A green tick or red cross printed beside an option.
+     *
+     * Board papers published as answer keys mark the right option with a
+     * coloured glyph rather than the words "Answer: B". The glyph is an image,
+     * so the key is invisible to any amount of text parsing — these tokens
+     * carry it into the parse stream instead.
+     */
+    static final String TICK_MARKER  = "\u0000TICK";
+    static final String CROSS_MARKER = "\u0000CROSS";
 
     /**
      * Word: body elements are already in document order, and a picture lives in
@@ -392,6 +641,48 @@ public class DocumentImportService {
         return out.toString();
     }
 
+    /**
+     * Decides whether a drawn image is an answer-key glyph, and which one.
+     *
+     * Two signals together, because either alone misfires: the glyph must be
+     * SMALL on the page — a figure is never 12pt across — and its ink must be
+     * decisively green or red. White and near-white pixels are skipped so the
+     * surrounding page does not dilute the average, and pixels are sampled on a
+     * grid rather than exhaustively, since these are tiny and the answer is
+     * obvious from a fraction of them.
+     *
+     * Returns null for anything that is not clearly one or the other, which
+     * means an unusual paper degrades to "no key detected" — a reviewer fills
+     * it in — rather than to a confidently wrong answer key.
+     */
+    private static String classifyAnswerMarker(java.awt.image.BufferedImage img,
+                                               double drawnWidth, double drawnHeight) {
+        if (img == null) return null;
+        // Points on the page, not pixels: a high-resolution glyph is still tiny.
+        if (drawnWidth > 30 || drawnHeight > 30) return null;
+
+        int w = img.getWidth(), h = img.getHeight();
+        if (w == 0 || h == 0) return null;
+
+        long r = 0, g = 0, b = 0, n = 0;
+        int stepX = Math.max(1, w / 24), stepY = Math.max(1, h / 24);
+        for (int y = 0; y < h; y += stepY) {
+            for (int x = 0; x < w; x += stepX) {
+                int argb = img.getRGB(x, y);
+                if (((argb >>> 24) & 0xff) < 128) continue;            // transparent
+                int rr = (argb >> 16) & 0xff, gg = (argb >> 8) & 0xff, bb = argb & 0xff;
+                if (rr > 235 && gg > 235 && bb > 235) continue;        // page white
+                r += rr; g += gg; b += bb; n++;
+            }
+        }
+        if (n < 4) return null;                                        // almost no ink
+        long ar = r / n, ag = g / n, ab = b / n;
+
+        if (ag > ar + 25 && ag > ab + 25) return TICK_MARKER;
+        if (ar > ag + 45 && ar > ab + 45) return CROSS_MARKER;
+        return null;
+    }
+
     /** A text line or an image marker, with where it sat on the page. */
     private record Placed(double y, String line) {}
 
@@ -450,9 +741,23 @@ public class DocumentImportService {
             }
 
             try {
+                var ctmEarly = getGraphicsState().getCurrentTransformationMatrix();
+                java.awt.image.BufferedImage bitmap = image.getImage();
+
+                // A tick or cross is an answer key, not a figure. Recognising it
+                // here keeps it out of the question's artwork and turns it into
+                // something the parser can act on.
+                String verdict = classifyAnswerMarker(bitmap,
+                        Math.abs(ctmEarly.getScaleX()), Math.abs(ctmEarly.getScaleY()));
+                if (verdict != null) {
+                    double markerY = ctmEarly.getTranslateY() + Math.abs(ctmEarly.getScaleY()) / 2.0;
+                    sink.add(new Placed(markerY, verdict));
+                    return;
+                }
+
                 String fileName = UUID.randomUUID() + ".png";
                 ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-                ImageIO.write(image.getImage(), "png", bytes);
+                ImageIO.write(bitmap, "png", bytes);
                 Files.write(imageDir.resolve(fileName), bytes.toByteArray());
                 saved.add(fileName);
 

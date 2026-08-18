@@ -20,6 +20,17 @@ public class ParsedQuestion {
     private String optionB;
     private String optionC;
     private String optionD;
+    /**
+     * Per-option artwork, for papers whose options are pictures rather than
+     * text — mathematical expressions, structural formulae, or a second script
+     * alongside English. Board papers are routinely typeset this way, so an
+     * importer that can only carry text simply loses the options.
+     */
+    private String optionAImage;
+    private String optionBImage;
+    private String optionCImage;
+    private String optionDImage;
+
     private String correctAnswer;
     private Integer marks;
     private Double negativeMarks;
@@ -61,6 +72,18 @@ public class ParsedQuestion {
 
     public String getOptionD() { return optionD; }
     public void setOptionD(String optionD) { this.optionD = optionD; }
+
+    public String getOptionAImage() { return optionAImage; }
+    public void setOptionAImage(String v) { this.optionAImage = v; }
+
+    public String getOptionBImage() { return optionBImage; }
+    public void setOptionBImage(String v) { this.optionBImage = v; }
+
+    public String getOptionCImage() { return optionCImage; }
+    public void setOptionCImage(String v) { this.optionCImage = v; }
+
+    public String getOptionDImage() { return optionDImage; }
+    public void setOptionDImage(String v) { this.optionDImage = v; }
 
     public String getCorrectAnswer() { return correctAnswer; }
     public void setCorrectAnswer(String correctAnswer) { this.correctAnswer = correctAnswer; }

@@ -284,6 +284,14 @@ public class QuestionService {
                 }
                 question.setQuestionImage(image);
 
+                // Per-option artwork. A board paper renders every option as a
+                // picture, so dropping these would save four blank choices and
+                // leave the question unanswerable.
+                question.setOptionAImage(str(q.get("optionAImage")));
+                question.setOptionBImage(str(q.get("optionBImage")));
+                question.setOptionCImage(str(q.get("optionCImage")));
+                question.setOptionDImage(str(q.get("optionDImage")));
+
                 if (q.get("marks") != null && !str(q.get("marks")).isBlank()) {
                     question.setMarks(Integer.parseInt(str(q.get("marks"))));
                 }
