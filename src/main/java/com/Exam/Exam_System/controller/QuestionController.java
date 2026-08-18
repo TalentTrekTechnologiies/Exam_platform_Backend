@@ -3,6 +3,7 @@ package com.Exam.Exam_System.controller;
 import com.Exam.Exam_System.Entity.Question;
 import com.Exam.Exam_System.dto.UploadReport;
 import com.Exam.Exam_System.security.AccessGuard;
+import com.Exam.Exam_System.security.CurrentUser;
 import com.Exam.Exam_System.Entity.Exam;
 import com.Exam.Exam_System.dto.ParsedQuestion;
 import com.Exam.Exam_System.service.DocumentImportService;
@@ -12,6 +13,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 import java.util.Map;
+import java.util.ArrayList;
 
 /**
  * Question bank management.
@@ -28,10 +30,13 @@ public class QuestionController {
     private final QuestionService questionService;
     private final AccessGuard accessGuard;
     private final DocumentImportService documentImportService;
+    private final CurrentUser currentUser;
 
     public QuestionController(QuestionService questionService,
                               AccessGuard accessGuard,
-                              DocumentImportService documentImportService) {
+                              DocumentImportService documentImportService,
+                              CurrentUser currentUser) {
+        this.currentUser = currentUser;
         this.questionService = questionService;
         this.accessGuard = accessGuard;
         this.documentImportService = documentImportService;
@@ -81,6 +86,34 @@ public class QuestionController {
      * candidate against it. So this deliberately stops at a proposal, and the
      * separate confirm step is what actually writes.
      */
+
+    /**
+     * Earlier exams worth reusing questions from, newest first.
+     *
+     * Scoped to this institution, and empty papers are left out — there is
+     * nothing to take from them.
+     */
+    @GetMapping("/library")
+    public List<Map<String, Object>> reusableExams(@RequestParam(required = false) Long excludeExamId) {
+        return questionService.reusableExams(currentUser.adminId(), excludeExamId);
+    }
+
+    /** Copies chosen questions from earlier exams into this one. */
+    @PostMapping("/copy")
+    public UploadReport copyQuestions(@RequestBody Map<String, Object> request) {
+        Long targetExamId = Long.valueOf(String.valueOf(request.get("targetExamId")));
+        accessGuard.requireOwnedExam(targetExamId);
+
+        if (!(request.get("questionIds") instanceof List<?> raw) || raw.isEmpty()) {
+            throw new IllegalArgumentException("No questions were chosen.");
+        }
+        List<Long> ids = new ArrayList<>();
+        for (Object o : raw) {
+            if (o != null) ids.add(Long.valueOf(String.valueOf(o)));
+        }
+        return questionService.copyQuestionsInto(targetExamId, ids, currentUser.adminId());
+    }
+
     @PostMapping("/import/preview")
     public DocumentImportService.ImportPreview previewDocument(@RequestParam("file") MultipartFile file,
                                                                @RequestParam Long examId) {

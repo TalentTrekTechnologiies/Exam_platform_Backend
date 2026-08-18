@@ -152,6 +152,108 @@ public class QuestionService {
         if (q.getNegativeMarks() < 0) q.setNegativeMarks(Math.abs(q.getNegativeMarks()));
     }
 
+
+    /**
+     * One line per exam this institution has already built, for choosing a
+     * paper to reuse questions from.
+     *
+     * Carries the exam's TITLE. A picker that lists "#12" asks staff to
+     * remember which number was last year's mock, which nobody does.
+     */
+    @Transactional(readOnly = true)
+    public List<Map<String, Object>> reusableExams(Long adminId, Long excludeExamId) {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (Exam exam : examRepository.findByAdminIdOrderByIdDesc(adminId)) {
+            if (excludeExamId != null && excludeExamId.equals(exam.getId())) continue;
+            long count = questionRepository.findByExamId(exam.getId()).size();
+            if (count == 0) continue;               // nothing to offer from an empty paper
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("examId", exam.getId());
+            row.put("examTitle", exam.getTitle());
+            row.put("questionCount", count);
+            row.put("published", exam.isPublished());
+            row.put("startDate", exam.getStartDate());
+            out.add(row);
+        }
+        return out;
+    }
+
+    /**
+     * Copies questions from earlier exams into this one.
+     *
+     * Copies, never links. The new exam gets its own rows, so editing or
+     * deleting one here cannot reach back and alter a paper that has already
+     * been sat — an old exam's results must stay exactly as they were marked.
+     *
+     * Sections are matched by NAME and created where missing, so a question
+     * from last year's "Physics" lands in this year's "Physics" rather than
+     * pointing at a section belonging to another exam.
+     */
+    @Transactional
+    public UploadReport copyQuestionsInto(Long targetExamId, List<Long> questionIds, Long adminId) {
+        UploadReport report = new UploadReport();
+        if (questionIds == null || questionIds.isEmpty()) {
+            throw new IllegalArgumentException("No questions were chosen.");
+        }
+
+        Exam target = examRepository.findById(targetExamId).orElse(null);
+        if (target == null || !adminId.equals(target.getAdminId())) {
+            throw new IllegalArgumentException("That exam does not exist.");
+        }
+
+        // Which exams this admin owns — the guard that stops one institution
+        // copying another's paper by guessing question ids.
+        Set<Long> ownedExams = new HashSet<>();
+        for (Exam e : examRepository.findByAdminIdOrderByIdDesc(adminId)) ownedExams.add(e.getId());
+
+        Map<String, Long> targetSections = new HashMap<>();
+        for (Section sec : sectionRepository.findByExamId(targetExamId)) {
+            if (sec.getName() != null) targetSections.put(sec.getName().trim().toLowerCase(), sec.getId());
+        }
+        Map<Long, String> sourceSectionNames = new HashMap<>();
+
+        int line = 0;
+        for (Long id : questionIds) {
+            line++;
+            Question src = id == null ? null : questionRepository.findById(id).orElse(null);
+            if (src == null || !ownedExams.contains(src.getExamId())) {
+                report.recordError(line, "That question could not be found.", String.valueOf(id));
+                continue;
+            }
+
+            Question copy = new Question();
+            copy.setExamId(targetExamId);
+            copy.setQuestionText(src.getQuestionText());
+            copy.setQuestionImage(src.getQuestionImage());
+            copy.setOptionA(src.getOptionA());   copy.setOptionAImage(src.getOptionAImage());
+            copy.setOptionB(src.getOptionB());   copy.setOptionBImage(src.getOptionBImage());
+            copy.setOptionC(src.getOptionC());   copy.setOptionCImage(src.getOptionCImage());
+            copy.setOptionD(src.getOptionD());   copy.setOptionDImage(src.getOptionDImage());
+            copy.setCorrectAnswer(src.getCorrectAnswer());
+            copy.setMarks(src.getMarks());
+            copy.setNegativeMarks(src.getNegativeMarks());
+
+            if (src.getSectionId() != null) {
+                String name = sourceSectionNames.computeIfAbsent(src.getSectionId(),
+                        sid -> sectionRepository.findById(sid).map(Section::getName).orElse(null));
+                if (name != null && !name.isBlank()) {
+                    copy.setSectionId(resolveSection(targetExamId, name, targetSections));
+                }
+            }
+
+            try {
+                applyExamDefaults(copy, target);
+                validate(copy);
+                questionRepository.save(copy);
+                report.recordSaved();
+            } catch (IllegalArgumentException e) {
+                report.recordError(line, e.getMessage(),
+                        src.getQuestionText() == null ? "" : src.getQuestionText());
+            }
+        }
+        return report;
+    }
+
     /**
      * Bulk import.
      *
