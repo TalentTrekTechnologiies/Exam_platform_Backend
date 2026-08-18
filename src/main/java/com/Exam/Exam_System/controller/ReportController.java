@@ -2,11 +2,15 @@ package com.Exam.Exam_System.controller;
 
 import com.Exam.Exam_System.Entity.Exam;
 import com.Exam.Exam_System.security.AccessGuard;
+import com.Exam.Exam_System.security.CurrentUser;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
 import java.sql.Timestamp;
 import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 
 /**
  * Results for a finished exam — the reporting counterpart to the live monitor.
@@ -25,8 +29,11 @@ public class ReportController {
 
     private final JdbcTemplate jdbc;
     private final AccessGuard accessGuard;
+    private final CurrentUser currentUser;
 
-    public ReportController(JdbcTemplate jdbc, AccessGuard accessGuard) {
+    public ReportController(JdbcTemplate jdbc, AccessGuard accessGuard,
+                            CurrentUser currentUser) {
+        this.currentUser = currentUser;
         this.jdbc = jdbc;
         this.accessGuard = accessGuard;
     }
@@ -45,6 +52,56 @@ public class ReportController {
              WHERE es.exam_id = ? AND e.admin_id = ?
              ORDER BY s.hall_ticket
             """;
+
+
+    /**
+     * Every exam this college has run, with its headline result.
+     *
+     * The detailed report answers "how did this cohort do"; this answers the
+     * question that comes before it — which exam, and how did they compare.
+     * Without it the results screen could only ever show whichever exam
+     * happened to be open, and a past paper was unreachable without going back
+     * to build it again.
+     *
+     * One aggregate query rather than a report each: a college with thirty
+     * exams should not cost thirty round trips to draw a list.
+     */
+    @GetMapping
+    public List<Map<String, Object>> allExamReports() {
+        String sql = """
+                SELECT e.id,
+                       e.title,
+                       e.start_date,
+                       e.published,
+                       COUNT(DISTINCT es.student_id) AS candidates,
+                       COUNT(DISTINCT CASE WHEN a.status = 'SUBMITTED' THEN a.student_id END) AS submitted,
+                       AVG(CASE WHEN a.status = 'SUBMITTED' THEN a.score END) AS avg_score,
+                       MAX(CASE WHEN a.status = 'SUBMITTED' THEN a.score END) AS top_score
+                  FROM exams e
+                  LEFT JOIN exam_student es ON es.exam_id = e.id
+                  LEFT JOIN attempts a      ON a.exam_id = e.id AND a.student_id = es.student_id
+                 WHERE e.admin_id = ?
+                 GROUP BY e.id, e.title, e.start_date, e.published
+                 ORDER BY e.id DESC
+                """;
+
+        return jdbc.query(sql, (rs, i) -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("examId", rs.getLong("id"));
+            row.put("examTitle", rs.getString("title"));
+            java.sql.Timestamp started = rs.getTimestamp("start_date");
+            row.put("startDate", started == null ? null : started.toLocalDateTime());
+            row.put("published", rs.getBoolean("published"));
+            row.put("totalCandidates", rs.getInt("candidates"));
+            row.put("submittedCount", rs.getInt("submitted"));
+
+            double avg = rs.getDouble("avg_score");
+            row.put("averageScore", rs.wasNull() ? null : Math.round(avg * 10) / 10.0);
+            double top = rs.getDouble("top_score");
+            row.put("topScore", rs.wasNull() ? null : top);
+            return row;
+        }, currentUser.adminId());
+    }
 
     @GetMapping("/{examId}")
     public Map<String, Object> report(@PathVariable Long examId) {
