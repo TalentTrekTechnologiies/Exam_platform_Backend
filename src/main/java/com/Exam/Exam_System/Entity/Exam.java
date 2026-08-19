@@ -48,6 +48,23 @@ public class Exam {
     private LocalDateTime publishedAt;
 
     /**
+     * Whether candidates may see their own score.
+     *
+     * Separate from publishing, and deliberately so: publishing decides whether
+     * a paper can be sat, this decides whether the marks are out. A college
+     * moderates before it announces — a question is dropped, a key is
+     * corrected, a malpractice case is heard — and none of that is possible if
+     * every candidate has already read their score off the screen the moment
+     * they pressed submit. Defaults to false, so results are held unless
+     * somebody deliberately releases them.
+     */
+    @Column(name = "results_released", nullable = false)
+    private boolean resultsReleased = false;
+
+    @Column(name = "results_released_at")
+    private LocalDateTime resultsReleasedAt;
+
+    /**
      * This exam's default marking scheme, applied to any question that doesn't
      * declare its own.
      *
@@ -176,6 +193,12 @@ public class Exam {
 
 	public LocalDateTime getPublishedAt() { return publishedAt; }
 	public void setPublishedAt(LocalDateTime publishedAt) { this.publishedAt = publishedAt; }
+
+	public boolean isResultsReleased() { return resultsReleased; }
+	public void setResultsReleased(boolean resultsReleased) { this.resultsReleased = resultsReleased; }
+
+	public LocalDateTime getResultsReleasedAt() { return resultsReleasedAt; }
+	public void setResultsReleasedAt(LocalDateTime resultsReleasedAt) { this.resultsReleasedAt = resultsReleasedAt; }
 
 	public Integer getDefaultMarks() { return defaultMarks; }
 	public void setDefaultMarks(Integer defaultMarks) { this.defaultMarks = defaultMarks; }

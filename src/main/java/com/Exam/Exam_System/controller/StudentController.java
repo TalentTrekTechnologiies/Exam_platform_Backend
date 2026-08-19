@@ -380,10 +380,35 @@ public class StudentController {
         return ResponseEntity.ok(body);
     }
 
+    /**
+     * The candidate's own scorecard — once the college has announced results.
+     *
+     * Held back by default. A score shown the instant somebody presses submit
+     * cannot be taken back: it is out around the hall before an invigilator has
+     * looked at a single malpractice report, and a key corrected afterwards
+     * means every candidate has already seen a mark that no longer stands.
+     *
+     * The withheld reply is a 200 carrying the submission, not an error, so the
+     * candidate gets a page confirming their paper is in rather than something
+     * that reads like their exam failed to save.
+     */
     @GetMapping("/result/{attemptId}")
-    public ResultResponse getResult(@PathVariable Long attemptId) {
-        accessGuard.requireOwnAttempt(attemptId);
-        return attemptService.getResult(attemptId);
+    public ResponseEntity<?> getResult(@PathVariable Long attemptId) {
+        var attempt = accessGuard.requireOwnAttemptEntity(attemptId);
+
+        var exam = examRepository.findById(attempt.getExamId()).orElse(null);
+        if (exam == null || !exam.isResultsReleased()) {
+            Map<String, Object> held = new LinkedHashMap<>();
+            held.put("attemptId", attemptId);
+            held.put("resultsReleased", false);
+            held.put("submitted", "SUBMITTED".equals(attempt.getStatus()));
+            held.put("submittedAt", attempt.getSubmittedAt());
+            held.put("message", "Your paper has been received. "
+                    + "Your college will announce the results.");
+            return ResponseEntity.ok(held);
+        }
+
+        return ResponseEntity.ok(attemptService.getResult(attemptId));
     }
 
     @GetMapping("/duration/{examId}")

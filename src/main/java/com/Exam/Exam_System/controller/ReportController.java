@@ -73,6 +73,7 @@ public class ReportController {
                        e.title,
                        e.start_date,
                        e.published,
+                       e.results_released,
                        COUNT(DISTINCT es.student_id) AS candidates,
                        COUNT(DISTINCT CASE WHEN a.status = 'SUBMITTED' THEN a.student_id END) AS submitted,
                        AVG(CASE WHEN a.status = 'SUBMITTED' THEN a.score END) AS avg_score,
@@ -81,7 +82,7 @@ public class ReportController {
                   LEFT JOIN exam_student es ON es.exam_id = e.id
                   LEFT JOIN attempts a      ON a.exam_id = e.id AND a.student_id = es.student_id
                  WHERE e.admin_id = ?
-                 GROUP BY e.id, e.title, e.start_date, e.published
+                 GROUP BY e.id, e.title, e.start_date, e.published, e.results_released
                  ORDER BY e.id DESC
                 """;
 
@@ -92,6 +93,7 @@ public class ReportController {
             java.sql.Timestamp started = rs.getTimestamp("start_date");
             row.put("startDate", started == null ? null : started.toLocalDateTime());
             row.put("published", rs.getBoolean("published"));
+            row.put("resultsReleased", rs.getBoolean("results_released"));
             row.put("totalCandidates", rs.getInt("candidates"));
             row.put("submittedCount", rs.getInt("submitted"));
 
@@ -149,6 +151,8 @@ public class ReportController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("examId", examId);
         out.put("examTitle", exam.getTitle());
+        out.put("resultsReleased", exam.isResultsReleased());
+        out.put("resultsReleasedAt", exam.getResultsReleasedAt());
         out.put("totalCandidates", rows.size());
         out.put("submittedCount", submittedCount);
         out.put("notSubmittedCount", rows.size() - submittedCount);

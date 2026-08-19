@@ -14,6 +14,8 @@ import com.Exam.Exam_System.service.PublicationService;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.LinkedHashMap;
+import java.time.LocalDateTime;
 import java.util.Map;
 
 @RestController
@@ -142,6 +144,44 @@ public class ExamController {
     @PostMapping("/{examId}/unpublish")
     public PublicationStatus unpublish(@PathVariable Long examId) {
         return publicationService.unpublish(accessGuard.requireOwnedExam(examId));
+    }
+
+    /**
+     * Announces the results, letting candidates see their own scorecard.
+     *
+     * Until this is called a candidate who submits is told their paper was
+     * received and nothing more. Staff see every score throughout — moderation
+     * is the point of holding them — so this changes what the candidate sees,
+     * never what the college can.
+     */
+    @PostMapping("/{examId}/release-results")
+    public Map<String, Object> releaseResults(@PathVariable Long examId) {
+        Exam exam = accessGuard.requireOwnedExam(examId);
+        exam.setResultsReleased(true);
+        exam.setResultsReleasedAt(LocalDateTime.now());
+        examRepository.save(exam);
+        return resultState(exam);
+    }
+
+    /** Withdraws them again — a key was wrong, a question is being dropped. */
+    @PostMapping("/{examId}/hold-results")
+    public Map<String, Object> holdResults(@PathVariable Long examId) {
+        Exam exam = accessGuard.requireOwnedExam(examId);
+        exam.setResultsReleased(false);
+        exam.setResultsReleasedAt(null);
+        examRepository.save(exam);
+        return resultState(exam);
+    }
+
+    private Map<String, Object> resultState(Exam exam) {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("examId", exam.getId());
+        out.put("resultsReleased", exam.isResultsReleased());
+        out.put("resultsReleasedAt", exam.getResultsReleasedAt());
+        out.put("summary", exam.isResultsReleased()
+                ? "Results are out. Candidates can now see their scorecards."
+                : "Results are held. Candidates see only that their paper was received.");
+        return out;
     }
 
     /**
