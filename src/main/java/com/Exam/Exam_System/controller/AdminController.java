@@ -513,6 +513,108 @@ public class AdminController {
         return report;
     }
 
+    /**
+     * Moves a candidate to a different sitting of the same exam.
+     *
+     * Sittings are chosen when a batch is enrolled, but on the day people
+     * miss theirs — a bus is late, a lab is short of machines. Without this
+     * the only remedy was editing the database by hand, because enrolment
+     * refuses a candidate who is already in the exam.
+     *
+     * Refused once they have started: their attempt is bound to the sitting
+     * they sat, and moving it would leave a paper timed against a window its
+     * candidate was never in.
+     */
+    @PutMapping("/students/{studentId}/sitting")
+    public Map<String, Object> moveSitting(@PathVariable Long studentId,
+                                           @RequestBody Map<String, Object> request) {
+        Long examId = Long.valueOf(String.valueOf(request.get("examId")));
+        Long slotId = Long.valueOf(String.valueOf(request.get("slotId")));
+
+        accessGuard.requireOwnedExam(examId);
+        var slot = accessGuard.requireOwnedSlot(slotId);
+        if (!slot.getExamId().equals(examId)) {
+            throw new IllegalArgumentException("That sitting belongs to a different exam.");
+        }
+
+        Integer owned = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM students WHERE id = ? AND admin_id = ?",
+                Integer.class, studentId, currentUser.adminId());
+        if (owned == null || owned == 0) {
+            throw new IllegalArgumentException("That candidate is not on your roll.");
+        }
+
+        // A PENDING attempt is one the admin pre-built the night before; it is
+        // not a candidate who has begun. Only a live or finished attempt fixes
+        // the sitting.
+        Integer sat = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM attempts WHERE student_id = ? AND exam_id = ? AND status <> 'PENDING'",
+                Integer.class, studentId, examId);
+        if (sat != null && sat > 0) {
+            throw new IllegalArgumentException(
+                    "This candidate has already started the exam, so their sitting cannot be changed.");
+        }
+
+        int moved = jdbc.update(
+                "UPDATE exam_student SET slot_id = ? WHERE student_id = ? AND exam_id = ?",
+                slotId, studentId, examId);
+        if (moved == 0) {
+            throw new IllegalArgumentException("That candidate is not enrolled in this exam.");
+        }
+
+        // A prepared paper carries the sitting it was built for, and starting it
+        // caps the candidate's clock at that sitting's close. Left behind, a
+        // candidate moved from the morning to the evening would start at 5pm
+        // against a window that shut at noon — and be given no time at all.
+        jdbc.update("UPDATE attempts SET slot_id = ? WHERE student_id = ? AND exam_id = ? AND status = 'PENDING'",
+                slotId, studentId, examId);
+
+        return Map.of("moved", true, "slotId", slotId);
+    }
+
+    /**
+     * Takes a candidate off one exam, leaving them on the college roll.
+     *
+     * Enrolling the wrong batch is easy and was previously permanent. Removing
+     * the enrolment does not delete the person, so their other exams and past
+     * results are untouched.
+     */
+    @DeleteMapping("/students/{studentId}/exam/{examId}")
+    public Map<String, Object> unenrol(@PathVariable Long studentId, @PathVariable Long examId) {
+        accessGuard.requireOwnedExam(examId);
+
+        Integer owned = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM students WHERE id = ? AND admin_id = ?",
+                Integer.class, studentId, currentUser.adminId());
+        if (owned == null || owned == 0) {
+            throw new IllegalArgumentException("That candidate is not on your roll.");
+        }
+
+        Integer sat = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM attempts WHERE student_id = ? AND exam_id = ? AND status <> 'PENDING'",
+                Integer.class, studentId, examId);
+        if (sat != null && sat > 0) {
+            throw new IllegalArgumentException(
+                    "This candidate has already sat this exam, so removing them would lose their paper.");
+        }
+
+        // Any paper prepared for them goes too. One attempt is allowed per
+        // student per exam, so a leftover row would block them if they were
+        // ever enrolled again — and would hold a shuffle built for a sitting
+        // they are no longer in.
+        jdbc.update("""
+                DELETE aq FROM attempt_questions aq
+                  JOIN attempts a ON a.id = aq.attempt_id
+                 WHERE a.student_id = ? AND a.exam_id = ? AND a.status = 'PENDING'
+                """, studentId, examId);
+        jdbc.update("DELETE FROM attempts WHERE student_id = ? AND exam_id = ? AND status = 'PENDING'",
+                studentId, examId);
+
+        int removed = jdbc.update(
+                "DELETE FROM exam_student WHERE student_id = ? AND exam_id = ?", studentId, examId);
+        return Map.of("removed", removed > 0);
+    }
+
     /** Dashboard headline count — counted in the database, not by loading rows. */
     @GetMapping("/students/count")
     public Map<String, Object> countStudents(@RequestParam(required = false) Long examId) {

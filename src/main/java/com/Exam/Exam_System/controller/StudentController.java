@@ -113,6 +113,11 @@ public class StudentController {
         LocalDateTime now = LocalDateTime.now();
         ExamStudent valid = null;
         LocalDateTime nextStart = null;
+        // Whether anything stopped them other than the clock. Without this, an
+        // exam the staff had not published yet turned candidates away saying
+        // their window had closed — sending an invigilator to check the
+        // timetable when the paper simply had not been released.
+        boolean awaitingRelease = false;
 
         for (ExamStudent mapping : mappings) {
             if (mapping.getSlotId() == null) continue;
@@ -121,7 +126,8 @@ public class StudentController {
             // This is the guard that stops a half-written paper with an unchecked
             // answer key being walked into by a candidate who has the link.
             var examForMapping = examRepository.findById(mapping.getExamId()).orElse(null);
-            if (examForMapping == null || !examForMapping.isPublished()) continue;
+            if (examForMapping == null) continue;
+            if (!examForMapping.isPublished()) { awaitingRelease = true; continue; }
 
             var slot = slotService.getSlotById(mapping.getSlotId());
 
@@ -135,8 +141,13 @@ public class StudentController {
         }
 
         if (valid == null) {
-            return denied(nextStart != null
-                    ? "Your exam has not started yet. It opens at " + nextStart + "."
+            if (nextStart != null) {
+                return denied("Your exam has not started yet. It opens at " + nextStart + ".");
+            }
+            // Says which of the two it is, so the right person fixes the right
+            // thing: the invigilator releases the paper, or checks the sitting.
+            return denied(awaitingRelease
+                    ? "Your exam has not been released yet. Ask your invigilator to publish it."
                     : "Your exam window has closed.");
         }
 
