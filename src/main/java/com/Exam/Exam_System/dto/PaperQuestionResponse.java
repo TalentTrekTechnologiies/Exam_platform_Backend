@@ -38,9 +38,35 @@ public class PaperQuestionResponse {
     private final Double negativeMarks;
     private final List<OptionView> options;
 
+    // ── Coding questions ─────────────────────────────────────────────────
+    //
+    // Null on an MCQ. What is here is everything a candidate is entitled to
+    // see: the statement, the limits, and the worked example. What is NOT here
+    // is the hidden test cases — they never travel to a browser, which is why
+    // this DTO is assembled field by field rather than serialising the
+    // question entity that now holds both.
+
+    private final String type;
+    private final String constraintsText;
+    private final String sampleInput;
+    private final String sampleOutput;
+    private final String sampleExplanation;
+    private final String starterCode;
+    private final List<java.util.Map<String, String>> languages;
+
     public PaperQuestionResponse(Long id, int displayNumber, Long sectionId, String sectionName,
                                  String questionText, String questionImage,
                                  Integer marks, Double negativeMarks, List<OptionView> options) {
+        this(id, displayNumber, sectionId, sectionName, questionText, questionImage,
+             marks, negativeMarks, options, "MCQ", null, null, null, null, null, null);
+    }
+
+    public PaperQuestionResponse(Long id, int displayNumber, Long sectionId, String sectionName,
+                                 String questionText, String questionImage,
+                                 Integer marks, Double negativeMarks, List<OptionView> options,
+                                 String type, String constraintsText, String sampleInput,
+                                 String sampleOutput, String sampleExplanation, String starterCode,
+                                 List<java.util.Map<String, String>> languages) {
         this.id = id;
         this.displayNumber = displayNumber;
         this.sectionId = sectionId;
@@ -50,7 +76,22 @@ public class PaperQuestionResponse {
         this.marks = marks;
         this.negativeMarks = negativeMarks;
         this.options = options;
+        this.type = type;
+        this.constraintsText = constraintsText;
+        this.sampleInput = sampleInput;
+        this.sampleOutput = sampleOutput;
+        this.sampleExplanation = sampleExplanation;
+        this.starterCode = starterCode;
+        this.languages = languages;
     }
+
+    public String getType() { return type; }
+    public String getConstraintsText() { return constraintsText; }
+    public String getSampleInput() { return sampleInput; }
+    public String getSampleOutput() { return sampleOutput; }
+    public String getSampleExplanation() { return sampleExplanation; }
+    public String getStarterCode() { return starterCode; }
+    public List<java.util.Map<String, String>> getLanguages() { return languages; }
 
     public Long getId() { return id; }
     public int getDisplayNumber() { return displayNumber; }

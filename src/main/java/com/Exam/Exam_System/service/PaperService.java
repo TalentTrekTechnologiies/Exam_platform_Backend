@@ -152,6 +152,10 @@ public class PaperService {
             Question q = questions.get(aq.getQuestionId());
             if (q == null) continue; // question deleted after the attempt started
 
+            // A coding question carries its statement, its limits and its worked
+            // example — and no options, because there is nothing to choose
+            // between. Its test cases are fetched only when code is actually
+            // run, and the hidden ones never leave the server at all.
             paper.add(new PaperQuestionResponse(
                     q.getId(),
                     aq.getDisplayOrder(),
@@ -161,10 +165,43 @@ public class PaperService {
                     q.getQuestionImage(),
                     q.getMarks() == null ? 1 : q.getMarks(),
                     q.getNegativeMarks() == null ? 0.0 : q.getNegativeMarks(),
-                    optionsInDisplayOrder(q, aq.getOptionOrder())
+                    q.isCoding() ? List.of() : optionsInDisplayOrder(q, aq.getOptionOrder()),
+                    q.getType(),
+                    q.isCoding() ? q.getConstraintsText() : null,
+                    q.isCoding() ? q.getSampleInput() : null,
+                    q.isCoding() ? q.getSampleOutput() : null,
+                    q.isCoding() ? q.getSampleExplanation() : null,
+                    q.isCoding() ? q.getStarterCode() : null,
+                    q.isCoding() ? languagesFor(q) : null
             ));
         }
         return paper;
+    }
+
+    /**
+     * The languages this question may be answered in.
+     *
+     * Sent with the paper so the editor's dropdown is right the moment the
+     * question opens — a candidate should not have to wait on a second request
+     * to discover they may not use Python here.
+     */
+    private List<Map<String, String>> languagesFor(Question q) {
+        List<Map<String, String>> out = new ArrayList<>();
+        String allowed = q.getAllowedLanguages();
+        for (com.Exam.Exam_System.service.judge.Language language
+                : com.Exam.Exam_System.service.judge.Language.all()) {
+            if (allowed != null && !allowed.isBlank()) {
+                boolean permitted = java.util.Arrays.stream(allowed.split(","))
+                        .map(String::trim)
+                        .anyMatch(a -> a.equalsIgnoreCase(language.id()));
+                if (!permitted) continue;
+            }
+            Map<String, String> entry = new java.util.LinkedHashMap<>();
+            entry.put("id", language.id());
+            entry.put("label", language.label());
+            out.add(entry);
+        }
+        return out;
     }
 
     /** Applies a stored permutation to a question's options. */

@@ -38,6 +38,29 @@ public class Answer {
     @Column(name = "is_correct")
     private Boolean isCorrect;
 
+    // ── Coding answers ───────────────────────────────────────────────────
+    //
+    // An MCQ answer is one letter. A coding answer is a program, the language
+    // it is written in, and how it fared against the test cases — which is
+    // also what makes partial marks possible, because a candidate whose
+    // solution passes seven cases of ten has not simply got it wrong.
+
+    @Column(columnDefinition = "TEXT")
+    private String sourceCode;
+
+    private String language;
+
+    private Integer testsPassed;
+
+    private Integer testsTotal;
+
+    /** What this answer actually earned. Null on an MCQ, which is derived. */
+    private Double awardedMarks;
+
+    /** Compiler output, kept so an invigilator can answer "why did it score 0". */
+    @Column(columnDefinition = "TEXT")
+    private String judgeMessage;
+
     /**
      * When the candidate last changed this response. Doubles as an audit trail
      * for disputes ("when did they answer Q41?") and guarantees the upsert
@@ -64,4 +87,22 @@ public class Answer {
 
     public LocalDateTime getUpdatedAt() { return updatedAt; }
     public void setUpdatedAt(LocalDateTime updatedAt) { this.updatedAt = updatedAt; }
+
+    public String getSourceCode() { return sourceCode; }
+    public void setSourceCode(String sourceCode) { this.sourceCode = sourceCode; }
+
+    public String getLanguage() { return language; }
+    public void setLanguage(String language) { this.language = language; }
+
+    public Integer getTestsPassed() { return testsPassed; }
+    public void setTestsPassed(Integer testsPassed) { this.testsPassed = testsPassed; }
+
+    public Integer getTestsTotal() { return testsTotal; }
+    public void setTestsTotal(Integer testsTotal) { this.testsTotal = testsTotal; }
+
+    public Double getAwardedMarks() { return awardedMarks; }
+    public void setAwardedMarks(Double awardedMarks) { this.awardedMarks = awardedMarks; }
+
+    public String getJudgeMessage() { return judgeMessage; }
+    public void setJudgeMessage(String judgeMessage) { this.judgeMessage = judgeMessage; }
 }

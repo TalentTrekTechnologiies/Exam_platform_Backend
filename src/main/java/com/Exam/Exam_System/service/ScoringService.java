@@ -87,8 +87,23 @@ public class ScoringService {
             if (q == null) continue;
 
             Answer a = answers.get(aq.getQuestionId());
-            if (a == null || a.getSelectedOption() == null || a.getSelectedOption().isBlank()) {
-                continue; // unanswered scores zero, never a penalty
+            if (a == null) continue;   // unanswered scores zero, never a penalty
+
+            // A coding answer was already marked when the candidate submitted
+            // it — every test case was run then, deliberately, so that five
+            // thousand programs are not all compiled at the final whistle. Its
+            // marks are read back rather than recalculated, and it is never
+            // put through the multiple-choice comparison below: there is no
+            // correct letter to compare against, and doing so would apply the
+            // negative marking to every coding answer in the paper.
+            if (q.isCoding()) {
+                if (a.getAwardedMarks() == null) continue;
+                score += a.getAwardedMarks();
+                continue;
+            }
+
+            if (a.getSelectedOption() == null || a.getSelectedOption().isBlank()) {
+                continue;
             }
 
             boolean correct = a.getSelectedOption().trim().equalsIgnoreCase(
@@ -154,13 +169,29 @@ public class ScoringService {
             sectionScores.computeIfAbsent(sid, k -> new double[2]);
 
             Answer a = answers.get(aq.getQuestionId());
-            String given = (a == null || a.getSelectedOption() == null || a.getSelectedOption().isBlank())
-                    ? null : a.getSelectedOption().trim();
+            boolean coding = q.isCoding();
 
-            boolean isCorrect = given != null && given.equalsIgnoreCase(
-                    q.getCorrectAnswer() == null ? "" : q.getCorrectAnswer().trim());
+            String given;
+            boolean isCorrect;
+            double awarded;
 
-            double awarded = given == null ? 0.0 : (isCorrect ? marksOf(q) : -penaltyOf(q));
+            if (coding) {
+                // "Attempted" means code was submitted and judged, and correct
+                // means every case passed. A partial pass is neither — it is
+                // shown by the marks it earned, which is the only honest way to
+                // report seven cases of ten.
+                boolean judged = a != null && a.getAwardedMarks() != null;
+                given = judged ? (a.getLanguage() == null ? "code" : a.getLanguage()) : null;
+                isCorrect = judged && a.getTestsTotal() != null && a.getTestsTotal() > 0
+                        && Objects.equals(a.getTestsPassed(), a.getTestsTotal());
+                awarded = judged ? a.getAwardedMarks() : 0.0;
+            } else {
+                given = (a == null || a.getSelectedOption() == null || a.getSelectedOption().isBlank())
+                        ? null : a.getSelectedOption().trim();
+                isCorrect = given != null && given.equalsIgnoreCase(
+                        q.getCorrectAnswer() == null ? "" : q.getCorrectAnswer().trim());
+                awarded = given == null ? 0.0 : (isCorrect ? marksOf(q) : -penaltyOf(q));
+            }
 
             if (given == null) {
                 unanswered++;
