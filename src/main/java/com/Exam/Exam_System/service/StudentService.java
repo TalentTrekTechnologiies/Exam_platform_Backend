@@ -42,11 +42,15 @@ public class StudentService {
 
         if (adminId != null) {
             return studentRepository
-                    .findByAdminIdAndHallTicketIgnoreCaseAndNameIgnoreCase(adminId, ticket, candidateName);
+                    .findByAdminIdAndHallTicketIgnoreCaseAndNameIgnoreCase(adminId, ticket, candidateName)
+                    // A candidate taken off the books keeps their results but
+                    // loses their way in.
+                    .filter(s -> !s.isDeleted());
         }
 
         List<Student> matches =
-                studentRepository.findByHallTicketIgnoreCaseAndNameIgnoreCase(ticket, candidateName);
+                studentRepository.findByHallTicketIgnoreCaseAndNameIgnoreCase(ticket, candidateName)
+                        .stream().filter(s -> !s.isDeleted()).toList();
 
         if (matches.size() > 1) {
             throw new AmbiguousCandidateException(
@@ -61,12 +65,27 @@ public class StudentService {
      *
      * The institution scope is what stops a college's upload from silently
      * adopting another college's student who happens to share a roll number.
+     *
+     * A candidate who was previously removed is brought back rather than
+     * inserted afresh: the hall ticket is unique per institution, so a second
+     * row could not be written anyway, and reviving the original keeps every
+     * result already sitting against it.
      */
     @Transactional
     public Student saveOrGet(Long adminId, String hallTicket, String name) {
         String ticket = hallTicket.trim();
 
         return studentRepository.findByAdminIdAndHallTicketIgnoreCase(adminId, ticket)
+                .map(existing -> {
+                    if (existing.isDeleted()) {
+                        existing.setDeletedAt(null);
+                        // Enrolling under a new spelling is how the name gets
+                        // corrected; the old one was why they were removed.
+                        existing.setName(name.trim());
+                        return studentRepository.save(existing);
+                    }
+                    return existing;
+                })
                 .orElseGet(() -> {
                     Student s = new Student();
                     s.setAdminId(adminId);

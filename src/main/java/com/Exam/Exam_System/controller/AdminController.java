@@ -418,6 +418,7 @@ public class AdminController {
                   LEFT JOIN exam_student es ON es.student_id = s.id
                   LEFT JOIN exams e ON e.id = es.exam_id
                  WHERE s.admin_id = ?
+                   AND s.deleted_at IS NULL
                    AND (? IS NULL OR LOWER(s.hall_ticket) LIKE ? OR LOWER(s.name) LIKE ?)
                  ORDER BY s.hall_ticket, e.id
                 """;
@@ -613,6 +614,64 @@ public class AdminController {
         int removed = jdbc.update(
                 "DELETE FROM exam_student WHERE student_id = ? AND exam_id = ?", studentId, examId);
         return Map.of("removed", removed > 0);
+    }
+
+    /**
+     * Takes a candidate off the college's books, without touching their results.
+     *
+     * The row is marked removed rather than deleted. Every report reads the
+     * hall ticket and name from the students table, so a real DELETE would
+     * erase the marks of every exam this person ever sat — an admin tidying up
+     * duplicates would silently destroy the record of completed sittings.
+     *
+     * What actually goes is the future: enrolments in exams they have not sat
+     * are dropped, along with any paper already prepared for them, so they
+     * vanish from those rosters and from the live monitor. Enrolments they have
+     * a paper against are kept exactly as they are, which is what keeps Results
+     * showing what it showed yesterday.
+     *
+     * Enrolling the same hall ticket again brings the original candidate back,
+     * with their history intact.
+     */
+    @DeleteMapping("/students/{studentId}")
+    public Map<String, Object> removeStudent(@PathVariable Long studentId) {
+        Integer owned = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM students WHERE id = ? AND admin_id = ? AND deleted_at IS NULL",
+                Integer.class, studentId, currentUser.adminId());
+        if (owned == null || owned == 0) {
+            throw new IllegalArgumentException("That candidate is not on your roll.");
+        }
+
+        // What is being kept, counted before anything moves, so the caller can
+        // say plainly which results survive.
+        Integer sat = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM attempts WHERE student_id = ? AND status <> 'PENDING'",
+                Integer.class, studentId);
+
+        // Papers built for sittings they will now never take.
+        jdbc.update("""
+                DELETE aq FROM attempt_questions aq
+                  JOIN attempts a ON a.id = aq.attempt_id
+                 WHERE a.student_id = ? AND a.status = 'PENDING'
+                """, studentId);
+        jdbc.update("DELETE FROM attempts WHERE student_id = ? AND status = 'PENDING'", studentId);
+
+        // Off every roster except the ones holding a paper they actually sat.
+        int unenrolled = jdbc.update("""
+                DELETE FROM exam_student
+                 WHERE student_id = ?
+                   AND exam_id NOT IN (
+                       SELECT exam_id FROM attempts
+                        WHERE student_id = ? AND status <> 'PENDING')
+                """, studentId, studentId);
+
+        jdbc.update("UPDATE students SET deleted_at = NOW() WHERE id = ?", studentId);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("removed", true);
+        out.put("unenrolledFrom", unenrolled);
+        out.put("resultsKept", sat == null ? 0 : sat);
+        return out;
     }
 
     /** Dashboard headline count — counted in the database, not by loading rows. */

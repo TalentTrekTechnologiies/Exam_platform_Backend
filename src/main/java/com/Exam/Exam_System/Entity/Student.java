@@ -50,8 +50,34 @@ public class Student {
     @Column(length = 20)
     private String phone;
 
+    /**
+     * When this candidate was taken off the college's books, or null.
+     *
+     * Removed rather than deleted, because the results are not the candidate's
+     * row to take with them. Every report reads the hall ticket and name from
+     * here, so a real DELETE would erase the marks of every exam this person
+     * ever sat — an admin tidying a roster would silently destroy the record of
+     * a completed sitting. Removed candidates drop off the student list and can
+     * no longer sign in; every mark they earned stays exactly where it was.
+     */
+    @Column(name = "deleted_at")
+    private java.time.LocalDateTime deletedAt;
+
     public Long getId() {
         return id;
+    }
+
+    public java.time.LocalDateTime getDeletedAt() {
+        return deletedAt;
+    }
+
+    public void setDeletedAt(java.time.LocalDateTime deletedAt) {
+        this.deletedAt = deletedAt;
+    }
+
+    /** True once this candidate has been taken off the books. */
+    public boolean isDeleted() {
+        return deletedAt != null;
     }
 
     public String getEmail() {
