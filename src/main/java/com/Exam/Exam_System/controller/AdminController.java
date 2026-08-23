@@ -674,6 +674,82 @@ public class AdminController {
         return out;
     }
 
+    /**
+     * Takes many candidates off the books at once.
+     *
+     * Clearing a mistaken roster upload one row at a time is a request per
+     * candidate; a batch of five hundred is five hundred round trips and the
+     * admin sits and watches it. This does the same work as the single removal
+     * in four set-based statements, whatever the size of the selection.
+     *
+     * Every rule from the single version holds: results are never touched, only
+     * enrolments with no paper against them are dropped, and a candidate not on
+     * this admin's roll is silently skipped rather than deleted.
+     */
+    @PostMapping("/students/remove")
+    public Map<String, Object> removeStudents(@RequestBody Map<String, Object> request) {
+        if (!(request.get("studentIds") instanceof List<?> raw) || raw.isEmpty()) {
+            throw new IllegalArgumentException("No candidates were selected.");
+        }
+
+        List<Long> asked = new ArrayList<>();
+        for (Object o : raw) {
+            if (o != null) asked.add(Long.valueOf(o.toString()));
+        }
+        if (asked.isEmpty()) throw new IllegalArgumentException("No candidates were selected.");
+
+        // Scoped to this college before anything is written. A crafted request
+        // naming another institution's candidates removes none of them.
+        List<Long> ids = jdbc.queryForList(
+                "SELECT id FROM students WHERE admin_id = ? AND deleted_at IS NULL AND id IN (" + holes(asked) + ")",
+                Long.class, args(currentUser.adminId(), asked));
+        if (ids.isEmpty()) {
+            return Map.of("removed", 0, "unenrolledFrom", 0, "skipped", asked.size());
+        }
+
+        String in = holes(ids);
+        Object[] a = ids.toArray();
+
+        jdbc.update("""
+                DELETE aq FROM attempt_questions aq
+                  JOIN attempts a ON a.id = aq.attempt_id
+                 WHERE a.status = 'PENDING' AND a.student_id IN (""" + in + ")", a);
+        jdbc.update("DELETE FROM attempts WHERE status = 'PENDING' AND student_id IN (" + in + ")", a);
+
+        // NOT EXISTS rather than NOT IN: the exclusion has to be per candidate
+        // per exam, not "any exam anybody in this batch has sat".
+        int unenrolled = jdbc.update("""
+                DELETE es FROM exam_student es
+                 WHERE es.student_id IN (""" + in + """
+                )
+                   AND NOT EXISTS (SELECT 1 FROM attempts at
+                                    WHERE at.student_id = es.student_id
+                                      AND at.exam_id = es.exam_id
+                                      AND at.status <> 'PENDING')
+                """, a);
+
+        jdbc.update("UPDATE students SET deleted_at = NOW() WHERE id IN (" + in + ")", a);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("removed", ids.size());
+        out.put("unenrolledFrom", unenrolled);
+        out.put("skipped", asked.size() - ids.size());
+        return out;
+    }
+
+    /** `?,?,?` for an IN clause — never string-concatenated values. */
+    private String holes(List<?> values) {
+        return String.join(",", Collections.nCopies(values.size(), "?"));
+    }
+
+    /** One leading argument followed by a list, as a flat parameter array. */
+    private Object[] args(Object first, List<?> rest) {
+        Object[] out = new Object[rest.size() + 1];
+        out[0] = first;
+        for (int i = 0; i < rest.size(); i++) out[i + 1] = rest.get(i);
+        return out;
+    }
+
     /** Dashboard headline count — counted in the database, not by loading rows. */
     @GetMapping("/students/count")
     public Map<String, Object> countStudents(@RequestParam(required = false) Long examId) {
