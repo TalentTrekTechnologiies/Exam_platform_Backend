@@ -103,6 +103,16 @@ public class PaperService {
         List<Long> sectionIds = new ArrayList<>(bySection.keySet());
         sectionIds.sort(Comparator.comparing(id -> id == null ? Long.MAX_VALUE : id));
 
+        // How many of each section this candidate actually sits. A section left
+        // unset draws its whole bank, which is what every exam did before this
+        // existed and what most still want.
+        Map<Long, Integer> drawCounts = new HashMap<>();
+        for (Section s : sectionRepository.findByExamId(examId)) {
+            if (s.getQuestionsToDraw() != null && s.getQuestionsToDraw() > 0) {
+                drawCounts.put(s.getId(), s.getQuestionsToDraw());
+            }
+        }
+
         // Build the rows as plain tuples, then insert them in one JDBC batch.
         // AttemptQuestion uses IDENTITY id generation, which Hibernate cannot
         // batch — saveAll() would fire one INSERT per row. At slot-open, when
@@ -114,6 +124,18 @@ public class PaperService {
         for (Long sectionId : sectionIds) {
             List<Question> block = bySection.get(sectionId);
             Collections.shuffle(block);
+
+            // The draw. Already shuffled, so the first n are a fair random
+            // sample — and because this runs per attempt, two candidates side
+            // by side are sitting different questions, not the same set in a
+            // different order. Asking for more than the bank holds takes the
+            // bank: a section that loses a question the night before must not
+            // stop every paper from freezing.
+            Integer draw = drawCounts.get(sectionId);
+            if (draw != null && draw < block.size()) {
+                block = block.subList(0, draw);
+            }
+
             for (Question q : block) {
                 List<String> letters = new ArrayList<>();
                 for (CanonicalOption o : canonicalOptions(q)) letters.add(o.letter());

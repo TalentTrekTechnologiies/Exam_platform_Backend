@@ -3,6 +3,7 @@ package com.Exam.Exam_System.service;
 import com.Exam.Exam_System.Entity.Admin;
 import com.Exam.Exam_System.Entity.Exam;
 import com.Exam.Exam_System.Entity.Question;
+import com.Exam.Exam_System.Entity.Section;
 import com.Exam.Exam_System.dto.PublicationStatus;
 import com.Exam.Exam_System.repository.*;
 import org.slf4j.Logger;
@@ -13,7 +14,10 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Deciding whether an exam may be sat, and producing the link candidates use.
@@ -69,12 +73,62 @@ public class PublicationService {
         int slots = slotRepository.findAllByExamId(exam.getId()).size();
         int candidates = examStudentRepository.findByExamId(exam.getId()).size();
 
-        double totalMarks = questions.stream()
-                .mapToDouble(q -> q.getMarks() == null ? 1 : q.getMarks())
-                .sum();
-
         List<String> blockers = new ArrayList<>();
         List<String> warnings = new ArrayList<>();
+
+        /*
+         * Counts describe the paper a candidate sits, not the bank it is drawn
+         * from. A college holding two hundred Physics questions and setting
+         * twenty per paper needs this screen to say twenty, or the marks shown
+         * here are not the marks anybody can score.
+         */
+        Map<Long, List<Question>> bySection = new LinkedHashMap<>();
+        for (Question q : questions) {
+            bySection.computeIfAbsent(q.getSectionId(), k -> new ArrayList<>()).add(q);
+        }
+
+        Map<Long, Integer> draws = new HashMap<>();
+        for (Section s : sectionRepository.findByExamId(exam.getId())) {
+            List<Question> bank = bySection.getOrDefault(s.getId(), List.of());
+            Integer draw = s.getQuestionsToDraw();
+            if (draw == null || draw <= 0) continue;
+
+            if (draw > bank.size()) {
+                // Freezing takes the whole bank rather than failing the paper,
+                // so this is worth saying out loud but must not block a sitting.
+                warnings.add("\"" + s.getName() + "\" is set to draw " + draw
+                        + " questions but only has " + bank.size() + ". Every candidate will get all "
+                        + bank.size() + ".");
+                continue;
+            }
+
+            draws.put(s.getId(), draw);
+
+            // Marks have to match inside a drawn section, or two candidates sit
+            // papers worth different totals and their scores stop being
+            // comparable — which a rank order hides rather than shows.
+            if (draw < bank.size()
+                    && bank.stream().map(q -> q.getMarks() == null ? 1 : q.getMarks()).distinct().count() > 1) {
+                warnings.add("\"" + s.getName() + "\" draws " + draw + " of " + bank.size()
+                        + " questions, but they are not all worth the same marks — candidates would"
+                        + " sit papers with different totals. Even the marks up, or draw every question.");
+            }
+        }
+
+        // The paper as it will actually be sat. Where a section's marks are
+        // even, any n of them come to the same total; where they are not, the
+        // warning above already says this number cannot be relied on.
+        double totalMarks = 0;
+        int paperQuestions = 0;
+        for (Map.Entry<Long, List<Question>> e : bySection.entrySet()) {
+            List<Question> bank = e.getValue();
+            Integer draw = e.getKey() == null ? null : draws.get(e.getKey());
+            int take = draw == null ? bank.size() : Math.min(draw, bank.size());
+            for (int i = 0; i < take; i++) {
+                totalMarks += bank.get(i).getMarks() == null ? 1 : bank.get(i).getMarks();
+            }
+            paperQuestions += take;
+        }
 
         if (questions.isEmpty()) blockers.add("This exam has no questions.");
         if (slots == 0) blockers.add("No exam slot has been scheduled, so there is no window in which anyone can sit it.");
@@ -110,7 +164,9 @@ public class PublicationService {
         PublicationStatus status = new PublicationStatus();
         status.setPublished(exam.isPublished());
         status.setPublishedAt(exam.getPublishedAt());
-        status.setQuestionCount(questions.size());
+        // What a candidate sits, with the bank behind it when they differ.
+        status.setQuestionCount(paperQuestions);
+        status.setQuestionBank(paperQuestions == questions.size() ? 0 : questions.size());
         status.setSectionCount(sections);
         status.setSlotCount(slots);
         status.setCandidateCount(candidates);
