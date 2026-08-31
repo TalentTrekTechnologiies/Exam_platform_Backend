@@ -235,6 +235,29 @@ public class AttemptService {
      * read-only transaction would force that write to join a read-only context
      * and fail to flush.
      */
+    /**
+     * Notes that this candidate's browser is still there.
+     *
+     * A single indexed row update, deliberately not routed through the entity:
+     * loading and flushing an Attempt on every clock poll is what the attempt
+     * cache exists to avoid. At a full hall polling every twenty seconds this
+     * is around a hundred small writes a second, well inside what the database
+     * already carries for answers alone.
+     *
+     * Failure is swallowed. A missed heartbeat is an invigilator seeing a stale
+     * status for twenty seconds; an exception here would be a candidate's clock
+     * poll failing, which is far worse.
+     */
+    public void markSeen(Long attemptId) {
+        try {
+            jdbcTemplate.update(
+                    "UPDATE attempts SET last_seen_at = NOW() WHERE id = ? AND status <> 'SUBMITTED'",
+                    attemptId);
+        } catch (RuntimeException e) {
+            log.debug("Could not stamp last_seen_at for attempt {}: {}", attemptId, e.toString());
+        }
+    }
+
     public long getRemainingSeconds(Long attemptId) {
         AttemptCache.AttemptMeta meta = attemptCache.get(attemptId);
 

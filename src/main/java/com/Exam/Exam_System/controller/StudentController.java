@@ -354,9 +354,20 @@ public class StudentController {
     private static final Set<String> CAMERA_OBSERVATIONS =
             Set.of("FACE_ABSENT", "MULTIPLE_FACES", "CAMERA_BLOCKED");
 
+    /**
+     * The clock, and the heartbeat that comes with it.
+     *
+     * Every live paper polls this every twenty seconds whatever the candidate
+     * is doing, which makes it the one honest signal of "still there". The
+     * monitor used to read liveness from the newest saved answer instead, so
+     * anybody thinking about a hard question for two minutes was reported to
+     * the invigilator as disconnected.
+     */
     @GetMapping("/remaining/{attemptId}")
     public Map<String, Object> getRemaining(@PathVariable Long attemptId) {
         accessGuard.requireOwnAttempt(attemptId);
+
+        attemptService.markSeen(attemptId);
 
         long remaining = attemptService.getRemainingSeconds(attemptId);
         Map<String, Object> data = new LinkedHashMap<>();

@@ -40,6 +40,22 @@ public class Attempt {
 
     private String status; // STARTED, SUBMITTED
 
+    /**
+     * When this candidate's browser last spoke to the server.
+     *
+     * Liveness used to be inferred from the newest saved answer, which is not
+     * the same thing: a candidate reading a comprehension passage, or working a
+     * problem out on paper, saves nothing for minutes at a time and was shown to
+     * the invigilator as DISCONNECTED while writing perfectly normally. An
+     * invigilator walking to a desk that has no problem is the cost, and doing
+     * it during a real sitting is worse than not knowing.
+     *
+     * The paper polls the clock every twenty seconds regardless of what the
+     * candidate is doing, so this moves whether or not they are answering.
+     */
+    @Column(name = "last_seen_at")
+    private LocalDateTime lastSeenAt;
+
     private Double score;
 
     public Attempt() {}
@@ -94,6 +110,14 @@ public class Attempt {
 
     public void setSubmittedAt(LocalDateTime submittedAt) {
         this.submittedAt = submittedAt;
+    }
+
+    public LocalDateTime getLastSeenAt() {
+        return lastSeenAt;
+    }
+
+    public void setLastSeenAt(LocalDateTime lastSeenAt) {
+        this.lastSeenAt = lastSeenAt;
     }
 
     public String getStatus() {
