@@ -48,6 +48,7 @@ public class PublicationService {
     private final ExamStudentRepository examStudentRepository;
     private final AttemptRepository attemptRepository;
     private final AdminRepository adminRepository;
+    private final TestCaseRepository testCaseRepository;
 
     public PublicationService(ExamRepository examRepository,
                               QuestionRepository questionRepository,
@@ -55,7 +56,8 @@ public class PublicationService {
                               SlotRepository slotRepository,
                               ExamStudentRepository examStudentRepository,
                               AttemptRepository attemptRepository,
-                              AdminRepository adminRepository) {
+                              AdminRepository adminRepository,
+                              TestCaseRepository testCaseRepository) {
         this.examRepository = examRepository;
         this.questionRepository = questionRepository;
         this.sectionRepository = sectionRepository;
@@ -63,6 +65,7 @@ public class PublicationService {
         this.examStudentRepository = examStudentRepository;
         this.attemptRepository = attemptRepository;
         this.adminRepository = adminRepository;
+        this.testCaseRepository = testCaseRepository;
     }
 
     /** Full readiness picture: counts, blockers, warnings, and the candidate link. */
@@ -138,7 +141,7 @@ public class PublicationService {
         // silently cost every candidate the same marks.
         long unmarkable = questions.stream().filter(this::isUnmarkable).count();
         if (unmarkable > 0) {
-            blockers.add(unmarkable + " question(s) have no usable correct answer and could not be marked.");
+            blockers.add(unmarkable + " question(s) could not be marked — a multiple-choice question whose keyed option is blank, or a coding question with no test cases.");
         }
 
         if (candidates == 0) {
@@ -198,7 +201,18 @@ public class PublicationService {
         return base + "/verify?college=" + owner.getCode();
     }
 
+    /**
+     * Whether a question would go in front of candidates unable to be marked.
+     *
+     * Split by type, because the two fail in different ways. A multiple-choice
+     * question is unmarkable when its keyed option is blank. A coding question
+     * has no key at all — it is unmarkable when it has no test cases, and
+     * running the old option check against one reported every coding question
+     * as broken and made publishing the exam impossible.
+     */
     private boolean isUnmarkable(Question q) {
+        if (q.isCoding()) return testCaseRepository.countByQuestionId(q.getId()) == 0;
+
         String correct = q.getCorrectAnswer() == null ? "" : q.getCorrectAnswer().trim().toUpperCase();
         String text = switch (correct) {
             case "A" -> q.getOptionA();

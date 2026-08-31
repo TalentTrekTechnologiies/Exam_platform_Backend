@@ -65,6 +65,20 @@ public class PaperService {
     }
 
     /**
+     * Whether a question cannot be put in front of a candidate at all.
+     *
+     * Type-aware, and it has to be: a coding question has no A/B/C/D, so the
+     * options test alone reported every one of them as unanswerable and quietly
+     * dropped the entire coding round from every paper. A coding question is
+     * answerable by having a statement; whether it can be MARKED -- whether it
+     * has test cases -- is a publication check, in the same place the missing
+     * answer key for a multiple-choice question is caught.
+     */
+    private boolean unanswerable(Question q) {
+        return !q.isCoding() && canonicalOptions(q).isEmpty();
+    }
+
+    /**
      * How many questions a paper for this exam should currently hold.
      *
      * The shape the settings describe, which is not necessarily the shape of a
@@ -74,7 +88,7 @@ public class PaperService {
     @Transactional(readOnly = true)
     public int expectedPaperSize(Long examId) {
         List<Question> questions = new ArrayList<>(questionRepository.findByExamId(examId));
-        questions.removeIf(q -> canonicalOptions(q).isEmpty());
+        questions.removeIf(this::unanswerable);
 
         Map<Long, Integer> bank = new HashMap<>();
         for (Question q : questions) bank.merge(q.getSectionId(), 1, Integer::sum);
@@ -143,12 +157,12 @@ public class PaperService {
             throw new IllegalStateException("This exam has no questions yet.");
         }
 
-        // A question with no usable options is unanswerable — leaving it in the
-        // paper would count against the candidate's max score for nothing.
+        // A question that cannot be put to a candidate is left out — leaving it
+        // in the paper would count against their max score for nothing.
         questions.removeIf(q -> {
-            boolean empty = canonicalOptions(q).isEmpty();
-            if (empty) log.warn("Question {} has no options; excluded from exam {} paper.", q.getId(), examId);
-            return empty;
+            boolean out = unanswerable(q);
+            if (out) log.warn("Question {} has no options; excluded from exam {} paper.", q.getId(), examId);
+            return out;
         });
 
         if (questions.isEmpty()) {
@@ -318,7 +332,7 @@ public class PaperService {
     public Map<String, Object> describeStructure(Long examId) {
         // Copy before mutating — the repository's list is not ours to modify.
         List<Question> questions = new ArrayList<>(questionRepository.findByExamId(examId));
-        questions.removeIf(q -> canonicalOptions(q).isEmpty());
+        questions.removeIf(this::unanswerable);
 
         Map<Long, String> sectionNames = new LinkedHashMap<>();
         for (Section s : sectionRepository.findByExamId(examId)) {
