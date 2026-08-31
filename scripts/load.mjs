@@ -14,7 +14,7 @@
  */
 import http from "node:http";
 
-const BASE = "http://127.0.0.1:8080";
+const BASE = process.env.BASE || "http://127.0.0.1:8080";
 const args = Object.fromEntries(process.argv.slice(2).map((a) => a.split("=")));
 const N = Number(args.n || 500);            // virtual candidates
 const DURATION = Number(args.dur || 20);    // steady-state seconds
@@ -96,10 +96,43 @@ async function main() {
   console.log(`\n═══ LOAD TEST · ${N} candidates · ${DURATION}s steady ═══\n`);
 
   // ── Setup: one exam, 15 questions, one wide slot, N candidates ────────────
-  const reg = await req("POST", "/admin/register", {
-    form: multipart({ collegeName: "Load Test College", email: `load${tag}@x.edu`, password: "load-password-123" }, ""),
-  });
-  const admin = reg.body.token;
+  /*
+   * A deployment with registration turned off cannot be asked to create an
+   * account, and this used to try anyway: the register call was refused, the
+   * token came back undefined, and every step after it failed quietly. The run
+   * finished with a full report of zeroes and no indication that nothing had
+   * happened -- which reads as "the server did nothing under load" rather than
+   * "the harness never got in".
+   *
+   * So sign in as an existing admin when credentials are supplied:
+   *
+   *     ADMIN_EMAIL=you@college.edu ADMIN_PASSWORD=... node load.mjs
+   */
+  let admin;
+  if (process.env.ADMIN_EMAIL && process.env.ADMIN_PASSWORD) {
+    const login = await req("POST", "/admin/login", {
+      json: { email: process.env.ADMIN_EMAIL, password: process.env.ADMIN_PASSWORD },
+    });
+    admin = login.body?.token;
+    if (!admin) {
+      console.error(`Could not sign in as ${process.env.ADMIN_EMAIL} (HTTP ${login.status}).`);
+      console.error("Check the credentials, or drop them to register a throwaway account.");
+      process.exit(1);
+    }
+    console.log(`  signed in as ${process.env.ADMIN_EMAIL}`);
+  } else {
+    const reg = await req("POST", "/admin/register", {
+      form: multipart({ collegeName: "Load Test College", email: `load${tag}@x.edu`, password: "load-password-123" }, ""),
+    });
+    admin = reg.body?.token;
+    if (!admin) {
+      console.error(`Registration was refused (HTTP ${reg.status}).`);
+      console.error("  This deployment has ALLOW_REGISTRATION=false, which is correct for");
+      console.error("production. Supply an existing account instead:");
+      console.error("    ADMIN_EMAIL=you@college.edu ADMIN_PASSWORD=... node load.mjs");
+      process.exit(1);
+    }
+  }
 
   const exam = (await req("POST", "/admin/exam", { token: admin, json: {
     title: "Load Test Mock", duration: 180,
