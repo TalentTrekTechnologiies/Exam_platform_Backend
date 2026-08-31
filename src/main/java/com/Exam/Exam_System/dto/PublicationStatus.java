@@ -21,6 +21,12 @@ public class PublicationStatus {
     private String candidateLink;
 
     private int questionCount;
+
+    /**
+     * How many questions the exam holds, when that is more than a candidate
+     * sits. Zero when every question is on every paper.
+     */
+    private int questionBank;
     private int sectionCount;
     private int candidateCount;
     private int slotCount;
@@ -43,6 +49,9 @@ public class PublicationStatus {
 
     public int getQuestionCount() { return questionCount; }
     public void setQuestionCount(int questionCount) { this.questionCount = questionCount; }
+
+    public int getQuestionBank() { return questionBank; }
+    public void setQuestionBank(int questionBank) { this.questionBank = questionBank; }
 
     public int getSectionCount() { return sectionCount; }
     public void setSectionCount(int sectionCount) { this.sectionCount = sectionCount; }

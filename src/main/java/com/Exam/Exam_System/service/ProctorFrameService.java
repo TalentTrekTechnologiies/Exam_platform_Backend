@@ -38,13 +38,69 @@ public class ProctorFrameService {
     /** Generous for a small JPEG; a frame far above this is not a webcam still. */
     private static final long MAX_FRAME_BYTES = 400 * 1024;
 
-    private final Path frameDir = Paths.get("uploads", "proctor").toAbsolutePath().normalize();
+    /**
+     * Deliberately NOT under uploads/.
+     *
+     * That directory is published as static content and permitted to everyone,
+     * so a college's logo can be fetched before anybody has signed in. Frames
+     * were written to uploads/proctor, which put every candidate's face on that
+     * same unauthenticated path: GET /uploads/proctor/1.jpg returned a
+     * photograph with no token at all, and attempt ids are consecutive
+     * integers, so the whole hall could be walked by anyone able to reach the
+     * server — a candidate sitting the exam included. The ownership checks in
+     * MonitorController were being routed around entirely. These are personal
+     * data and must only ever be served by that endpoint.
+     */
+    private final Path frameDir = Paths.get("proctor-frames").toAbsolutePath().normalize();
+
+    /** Where frames used to be written, and are cleared out of on the way past. */
+    private static final Path LEGACY_FRAME_DIR =
+            Paths.get("uploads", "proctor").toAbsolutePath().normalize();
 
     public ProctorFrameService() {
         try {
             Files.createDirectories(frameDir);
         } catch (IOException e) {
             log.warn("Could not create the proctor frame directory: {}", e.getMessage());
+        }
+        discardLegacyFrames();
+    }
+
+    /**
+     * Deletes frames left behind in the old public directory.
+     *
+     * A server that ran the previous build has candidates' faces sitting on an
+     * unauthenticated path, and changing where new frames are written does
+     * nothing about the ones already there. Frames are transient by design —
+     * overwritten every few seconds, swept after a day — so there is nothing
+     * here worth keeping. This method can go once every server has restarted.
+     */
+    private void discardLegacyFrames() {
+        if (!Files.isDirectory(LEGACY_FRAME_DIR)) return;
+
+        int removed = 0;
+        try (Stream<Path> files = Files.list(LEGACY_FRAME_DIR)) {
+            for (Path p : files.toList()) {
+                try {
+                    if (Files.deleteIfExists(p)) removed++;
+                } catch (IOException e) {
+                    log.warn("Could not delete an exposed proctor frame at {}: {}", p, e.toString());
+                }
+            }
+        } catch (IOException e) {
+            log.warn("Could not clear the old proctor frame directory: {}", e.getMessage());
+        }
+
+        try {
+            Files.deleteIfExists(LEGACY_FRAME_DIR);
+        } catch (IOException ignored) {
+            // A file that would not delete keeps the directory alive; the
+            // frames themselves are what mattered, and those are gone.
+        }
+
+        if (removed > 0) {
+            log.info("Removed {} proctor frame(s) from the old, publicly readable uploads/proctor directory.",
+                    removed);
         }
     }
 

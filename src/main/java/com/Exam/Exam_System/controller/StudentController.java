@@ -113,6 +113,16 @@ public class StudentController {
         LocalDateTime now = LocalDateTime.now();
         ExamStudent valid = null;
         LocalDateTime nextStart = null;
+
+        // Every sitting open to this candidate right now, not just the first
+        // one found. A college running two exams at once can have somebody on
+        // both, and picking whichever the database happened to return first
+        // put candidates into the wrong paper with no way to say so.
+        List<ExamStudent> openNow = new ArrayList<>();
+
+        // When the candidate has already chosen, only that exam is considered.
+        String askedFor = request.getOrDefault("examId", "");
+        Long chosenExamId = askedFor.isBlank() ? null : Long.valueOf(askedFor.trim());
         // Whether anything stopped them other than the clock. Without this, an
         // exam the staff had not published yet turned candidates away saying
         // their window had closed — sending an invigilator to check the
@@ -132,12 +142,43 @@ public class StudentController {
             var slot = slotService.getSlotById(mapping.getSlotId());
 
             if (!now.isBefore(slot.getStartTime()) && !now.isAfter(slot.getEndTime())) {
-                valid = mapping;
-                break;
+                if (chosenExamId == null || chosenExamId.equals(mapping.getExamId())) {
+                    openNow.add(mapping);
+                }
+                continue;
             }
             if (now.isBefore(slot.getStartTime()) && (nextStart == null || slot.getStartTime().isBefore(nextStart))) {
                 nextStart = slot.getStartTime();
             }
+        }
+
+        if (openNow.size() == 1) {
+            valid = openNow.get(0);
+        } else if (openNow.size() > 1) {
+            /*
+             * More than one paper is open to this candidate. Which one they are
+             * sitting is theirs to say, not the database's to guess — an exam
+             * officer running Physics and Chemistry in overlapping windows
+             * cannot be the reason somebody sits the wrong subject.
+             */
+            List<Map<String, Object>> choices = new ArrayList<>();
+            for (ExamStudent m : openNow) {
+                var e = examRepository.findById(m.getExamId()).orElse(null);
+                if (e == null) continue;
+                var slot = slotService.getSlotById(m.getSlotId());
+                Map<String, Object> choice = new LinkedHashMap<>();
+                choice.put("examId", m.getExamId());
+                choice.put("examTitle", e.getTitle());
+                choice.put("duration", e.getDuration());
+                choice.put("closesAt", slot == null ? null : slot.getEndTime());
+                choices.add(choice);
+            }
+
+            Map<String, Object> body = new LinkedHashMap<>();
+            body.put("status", "Choose");
+            body.put("message", "You have more than one exam open. Pick the one you are sitting.");
+            body.put("exams", choices);
+            return ResponseEntity.ok(body);
         }
 
         if (valid == null) {
@@ -354,9 +395,20 @@ public class StudentController {
     private static final Set<String> CAMERA_OBSERVATIONS =
             Set.of("FACE_ABSENT", "MULTIPLE_FACES", "CAMERA_BLOCKED");
 
+    /**
+     * The clock, and the heartbeat that comes with it.
+     *
+     * Every live paper polls this every twenty seconds whatever the candidate
+     * is doing, which makes it the one honest signal of "still there". The
+     * monitor used to read liveness from the newest saved answer instead, so
+     * anybody thinking about a hard question for two minutes was reported to
+     * the invigilator as disconnected.
+     */
     @GetMapping("/remaining/{attemptId}")
     public Map<String, Object> getRemaining(@PathVariable Long attemptId) {
         accessGuard.requireOwnAttempt(attemptId);
+
+        attemptService.markSeen(attemptId);
 
         long remaining = attemptService.getRemainingSeconds(attemptId);
         Map<String, Object> data = new LinkedHashMap<>();

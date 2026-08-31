@@ -25,35 +25,7 @@
 
 name: exam-platform
 
-services:
-  db:
-    image: mysql:8.4
-    restart: unless-stopped
-    environment:
-      MYSQL_DATABASE: exam_system
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
-      # MUST match the app's timezone below.
-      #
-      # The exam clock is written by MySQL, not Java: AttemptService sets
-      # end_time = DATE_ADD(NOW(), INTERVAL duration MINUTE) using the
-      # DATABASE's clock, while the remaining-time endpoint compares it against
-      # the APP's clock. If the two disagree, the gap lands directly on every
-      # candidate's timer. This host runs UTC, so leaving it to inherit would
-      # mean a candidate starting their exam and being told time had run out.
-      TZ: ${TZ:-Asia/Kolkata}
-    volumes:
-      - db-data:/var/lib/mysql
-      - ./mysql-tuning.cnf:/etc/mysql/conf.d/tuning.cnf:ro
-    healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_PASSWORD}"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-    # Never published to the host: only the app container reaches the database.
-    expose:
-      - "3306"
-
-  app:
+x-app: &app
     build:
       context: ..
       dockerfile: Dockerfile
@@ -95,10 +67,76 @@ services:
       # live on a volume rather than inside the image — a rebuild must not
       # erase a paper's figures.
       - uploads:/app/uploads
+      # Webcam stills. On a volume for the same reason, and for one more: with
+      # more than one instance running, a frame uploaded through app2 has to be
+      # readable by whichever instance the invigilator's request lands on.
+      # Deliberately NOT under uploads/, which nginx serves to anyone.
+      - frames:/app/proctor-frames
+    # A ceiling, so a JVM that misbehaves cannot take the college website down
+    # with it -- this host serves both.
+    mem_limit: ${APP_MEM_LIMIT:-1g}
+
+services:
+  db:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: exam_system
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+      # MUST match the app's timezone below.
+      #
+      # The exam clock is written by MySQL, not Java: AttemptService sets
+      # end_time = DATE_ADD(NOW(), INTERVAL duration MINUTE) using the
+      # DATABASE's clock, while the remaining-time endpoint compares it against
+      # the APP's clock. If the two disagree, the gap lands directly on every
+      # candidate's timer. This host runs UTC, so leaving it to inherit would
+      # mean a candidate starting their exam and being told time had run out.
+      TZ: ${TZ:-Asia/Kolkata}
+    volumes:
+      - db-data:/var/lib/mysql
+      - ./mysql-tuning.cnf:/etc/mysql/conf.d/tuning.cnf:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-p${DB_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Never published to the host: only the app container reaches the database.
+    expose:
+      - "3306"
+
+  # The instance that always runs.
+  app:
+    <<: *app
     ports:
       # Loopback only. nginx on the host proxies /online/api/ to this.
       - "127.0.0.1:8080:8080"
 
+  # ── Extra instances ────────────────────────────────────────────────────────
+  #
+  #     docker compose -f docker-compose.behind-nginx.yml --profile scale up -d
+  #
+  # Off by default, and that default is usually right. On this host MySQL sits
+  # on the same machine and is the limit before the app tier is -- three JVMs
+  # competing with it for the same cores buys nothing and costs memory. Turn
+  # these on only when a load test says the app tier is what is saturating, and
+  # add the upstream block from nginx-snippet-online.conf at the same time or
+  # nothing will reach them.
+  #
+  # Keep (instances x DB_POOL_SIZE) under the database's max_connections, which
+  # mysql-tuning.cnf sets to 300.
+  app2:
+    <<: *app
+    profiles: ["scale"]
+    ports:
+      - "127.0.0.1:8081:8080"
+
+  app3:
+    <<: *app
+    profiles: ["scale"]
+    ports:
+      - "127.0.0.1:8082:8080"
+
 volumes:
   db-data:
   uploads:
+  frames:

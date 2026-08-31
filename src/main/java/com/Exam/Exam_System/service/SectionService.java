@@ -31,6 +31,7 @@ public class SectionService {
 
         existing.setName(updatedSection.getName());
         existing.setTotalMarks(updatedSection.getTotalMarks());
+        existing.setQuestionsToDraw(updatedSection.getQuestionsToDraw());
 
         return sectionRepository.save(existing);
     }

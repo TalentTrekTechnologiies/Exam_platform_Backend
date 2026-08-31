@@ -53,6 +53,7 @@ public class MonitorController {
                    a.status        AS attempt_status,
                    a.start_time,
                    a.end_time,
+                   a.last_seen_at,
                    a.submitted_at,
                    a.score,
                    COALESCE(ans.answered, 0)    AS answered,
@@ -93,6 +94,7 @@ public class MonitorController {
         List<Map<String, Object>> candidates = jdbc.query(ROSTER, (rs, i) -> {
             String attemptStatus = rs.getString("attempt_status");
             Timestamp lastActivity = rs.getTimestamp("last_activity");
+            Timestamp lastSeen = rs.getTimestamp("last_seen_at");
             Timestamp startTime = rs.getTimestamp("start_time");
             Timestamp endTime = rs.getTimestamp("end_time");
 
@@ -107,10 +109,26 @@ public class MonitorController {
                 remaining = endTime == null ? null
                         : Math.max(0, Duration.between(now, endTime.toLocalDateTime()).getSeconds());
 
-                // Fall back to start time: a candidate who has begun but not yet
-                // answered anything still counts as recently seen.
-                LocalDateTime seen = lastActivity != null ? lastActivity.toLocalDateTime()
-                        : (startTime != null ? startTime.toLocalDateTime() : null);
+                /*
+                 * The newest of everything that proves the candidate is there.
+                 *
+                 * This read the last saved ANSWER alone, which is not evidence
+                 * of presence: a candidate reading a passage or working a
+                 * problem out on paper saves nothing for minutes and was shown
+                 * as DISCONNECTED while writing normally, sending invigilators
+                 * to desks with nothing wrong. The paper polls the clock every
+                 * twenty seconds whatever they are doing, and that heartbeat is
+                 * what last_seen_at records.
+                 */
+                LocalDateTime seen = null;
+                if (lastSeen != null) seen = lastSeen.toLocalDateTime();
+                if (lastActivity != null) {
+                    LocalDateTime answered = lastActivity.toLocalDateTime();
+                    if (seen == null || answered.isAfter(seen)) seen = answered;
+                }
+                // Started but not yet heard from: the attempt itself is proof
+                // enough until the first poll lands.
+                if (seen == null && startTime != null) seen = startTime.toLocalDateTime();
                 boolean stale = seen != null
                         && Duration.between(seen, now).getSeconds() > STALE_AFTER_SECONDS;
 

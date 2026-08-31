@@ -19,6 +19,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -176,13 +177,24 @@ public class AttemptService {
 
         int prepared = 0;
         int alreadyReady = 0;
+        int rebuilt = 0;
 
         for (ExamStudent mapping : mappings) {
             Attempt existing = attemptRepository
                     .findByStudentIdAndExamId(mapping.getStudentId(), examId).orElse(null);
             if (existing != null) {
-                paperService.buildPaper(existing.getId(), examId); // fills any gap
-                alreadyReady++;
+                // A paper somebody is sitting, or has sat, is left exactly as it
+                // is: their answers are keyed to the questions they were given.
+                if (!PENDING.equals(existing.getStatus())) {
+                    alreadyReady++;
+                    continue;
+                }
+
+                // An unstarted paper is brought in line with the exam as it is
+                // configured now — which is what makes changing a section's
+                // draw count after preparing actually take effect.
+                if (paperService.ensurePaperMatchesSettings(existing.getId(), examId)) rebuilt++;
+                else alreadyReady++;
                 continue;
             }
 
@@ -198,16 +210,23 @@ public class AttemptService {
             prepared++;
         }
 
-        log.info("Prepared {} papers for exam {} ({} already ready).", prepared, examId, alreadyReady);
+        log.info("Prepared {} papers for exam {} ({} rebuilt, {} already ready).",
+                prepared, examId, rebuilt, alreadyReady);
 
         Map<String, Object> report = new LinkedHashMap<>();
         report.put("examId", examId);
         report.put("candidates", mappings.size());
         report.put("prepared", prepared);
+        report.put("rebuilt", rebuilt);
         report.put("alreadyReady", alreadyReady);
-        report.put("summary", prepared == 0
-                ? "All " + mappings.size() + " papers were already prepared."
-                : "Prepared " + prepared + " paper(s); " + alreadyReady + " already ready.");
+
+        List<String> parts = new ArrayList<>();
+        if (prepared > 0) parts.add("Prepared " + prepared + " paper(s)");
+        if (rebuilt > 0) parts.add("rebuilt " + rebuilt + " to match the current settings");
+        if (alreadyReady > 0) parts.add(alreadyReady + " already ready");
+        report.put("summary", parts.isEmpty()
+                ? "There are no candidates on this exam yet."
+                : String.join("; ", parts) + ".");
         return report;
     }
 
@@ -235,6 +254,29 @@ public class AttemptService {
      * read-only transaction would force that write to join a read-only context
      * and fail to flush.
      */
+    /**
+     * Notes that this candidate's browser is still there.
+     *
+     * A single indexed row update, deliberately not routed through the entity:
+     * loading and flushing an Attempt on every clock poll is what the attempt
+     * cache exists to avoid. At a full hall polling every twenty seconds this
+     * is around a hundred small writes a second, well inside what the database
+     * already carries for answers alone.
+     *
+     * Failure is swallowed. A missed heartbeat is an invigilator seeing a stale
+     * status for twenty seconds; an exception here would be a candidate's clock
+     * poll failing, which is far worse.
+     */
+    public void markSeen(Long attemptId) {
+        try {
+            jdbcTemplate.update(
+                    "UPDATE attempts SET last_seen_at = NOW() WHERE id = ? AND status <> 'SUBMITTED'",
+                    attemptId);
+        } catch (RuntimeException e) {
+            log.debug("Could not stamp last_seen_at for attempt {}: {}", attemptId, e.toString());
+        }
+    }
+
     public long getRemainingSeconds(Long attemptId) {
         AttemptCache.AttemptMeta meta = attemptCache.get(attemptId);
 
