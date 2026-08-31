@@ -65,6 +65,69 @@ public class PaperService {
     }
 
     /**
+     * How many questions a paper for this exam should currently hold.
+     *
+     * The shape the settings describe, which is not necessarily the shape of a
+     * paper frozen last week. Unanswerable questions are excluded here for the
+     * same reason the freeze excludes them.
+     */
+    @Transactional(readOnly = true)
+    public int expectedPaperSize(Long examId) {
+        List<Question> questions = new ArrayList<>(questionRepository.findByExamId(examId));
+        questions.removeIf(q -> canonicalOptions(q).isEmpty());
+
+        Map<Long, Integer> bank = new HashMap<>();
+        for (Question q : questions) bank.merge(q.getSectionId(), 1, Integer::sum);
+
+        Map<Long, Integer> draws = new HashMap<>();
+        for (Section s : sectionRepository.findByExamId(examId)) {
+            if (s.getQuestionsToDraw() != null && s.getQuestionsToDraw() > 0) {
+                draws.put(s.getId(), s.getQuestionsToDraw());
+            }
+        }
+
+        int total = 0;
+        for (Map.Entry<Long, Integer> e : bank.entrySet()) {
+            Integer draw = e.getKey() == null ? null : draws.get(e.getKey());
+            total += draw == null ? e.getValue() : Math.min(draw, e.getValue());
+        }
+        return total;
+    }
+
+    /**
+     * Makes an unstarted paper match the exam as it is configured now.
+     *
+     * Preparing papers deliberately leaves built ones alone, which is right for
+     * late enrolments and wrong the moment the paper's shape changes. An admin
+     * who prepares papers and then sets a section to draw twenty of seventy had
+     * every prepared candidate keep their seventy-question paper, and re-running
+     * Prepare Papers reported "already prepared" and changed nothing.
+     *
+     * Only ever called for a PENDING attempt. A paper somebody is sitting, or
+     * has sat, is never rebuilt — their answers are keyed to the questions they
+     * were given, and swapping those out would destroy a real result.
+     *
+     * @return true if the paper was discarded and built again.
+     */
+    @Transactional
+    public boolean ensurePaperMatchesSettings(Long attemptId, Long examId) {
+        long have = attemptQuestionRepository.countByAttemptId(attemptId);
+        if (have == 0) {
+            buildPaper(attemptId, examId);
+            return false;
+        }
+
+        int want = expectedPaperSize(examId);
+        if (have == want) return false;
+
+        attemptQuestionRepository.deleteByAttemptId(attemptId);
+        buildPaper(attemptId, examId);
+        log.info("Rebuilt paper for attempt {} — was {} questions, settings now ask for {}.",
+                attemptId, have, want);
+        return true;
+    }
+
+    /**
      * Freezes the paper layout for a new attempt. Idempotent: if a layout already
      * exists for this attempt it is left untouched, so a double-tap on "Start"
      * can never hand the candidate a different paper.
