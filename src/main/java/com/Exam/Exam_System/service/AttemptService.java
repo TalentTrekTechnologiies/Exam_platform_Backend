@@ -12,6 +12,7 @@ import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -43,6 +44,29 @@ public class AttemptService {
     private final AttemptCache attemptCache;
     private final ExamStudentRepository examStudentRepository;
     private final JdbcTemplate jdbcTemplate;
+
+    /**
+     * How long a silence has to last before it counts as a disconnection.
+     *
+     * The paper polls every twenty seconds, so anything under a minute is
+     * ordinary jitter -- a slow network, a garbage collection, a laptop lid
+     * closed for a moment. Returning time for those would hand out seconds
+     * nobody lost.
+     */
+    @Value("${exam.reconnect.grace-seconds:60}")
+    private int reconnectGraceSeconds;
+
+    /**
+     * The most time any one candidate can be given back, across the sitting.
+     *
+     * There has to be a ceiling, and this is the whole reason: a candidate who
+     * works out that disconnecting stops their clock has been handed unlimited
+     * time with a textbook. The cap turns that from an exploit into a
+     * nuisance, and every second of it is recorded against the attempt for an
+     * invigilator to look at.
+     */
+    @Value("${exam.reconnect.max-seconds:900}")
+    private int reconnectMaxSeconds;
 
     @PersistenceContext
     private EntityManager entityManager;
@@ -255,6 +279,39 @@ public class AttemptService {
      * and fail to flush.
      */
     /**
+     * Returns the time a disconnection cost, and stamps the heartbeat with it.
+     *
+     * Runs when a candidate's browser speaks again after a silence longer than
+     * the grace period. The gap is added to their deadline, capped twice over:
+     * at whatever is left of their personal allowance, and at the close of the
+     * slot, which is a hard ceiling nothing may push a candidate past.
+     *
+     * Deliberately one statement. The read-then-write version of this has a
+     * race that two browser tabs, or a reconnect landing beside a retry, would
+     * find at the worst possible moment -- both seeing the same old
+     * last_seen_at and both granting the same gap.
+     */
+    private static final String GRANT_RECONNECT_TIME = """
+            UPDATE attempts a
+              LEFT JOIN exam_slots s ON s.id = a.slot_id
+               SET a.end_time = LEAST(
+                       DATE_ADD(a.end_time, INTERVAL LEAST(
+                           TIMESTAMPDIFF(SECOND, a.last_seen_at, NOW()),
+                           ? - a.extended_seconds) SECOND),
+                       COALESCE(s.end_time, DATE_ADD(a.end_time, INTERVAL 1 DAY))),
+                   a.extended_seconds = a.extended_seconds + LEAST(
+                       TIMESTAMPDIFF(SECOND, a.last_seen_at, NOW()),
+                       ? - a.extended_seconds),
+                   a.last_seen_at = NOW()
+             WHERE a.id = ?
+               AND a.status = 'STARTED'
+               AND a.end_time IS NOT NULL
+               AND a.last_seen_at IS NOT NULL
+               AND TIMESTAMPDIFF(SECOND, a.last_seen_at, NOW()) >= ?
+               AND a.extended_seconds < ?
+            """;
+
+    /**
      * Notes that this candidate's browser is still there.
      *
      * A single indexed row update, deliberately not routed through the entity:
@@ -269,6 +326,21 @@ public class AttemptService {
      */
     public void markSeen(Long attemptId) {
         try {
+            // The gap case first. Its WHERE matches only after a real silence,
+            // so on the overwhelming majority of polls this touches nothing.
+            int returned = jdbcTemplate.update(GRANT_RECONNECT_TIME,
+                    reconnectMaxSeconds, reconnectMaxSeconds,
+                    attemptId, reconnectGraceSeconds, reconnectMaxSeconds);
+
+            if (returned > 0) {
+                // The deadline just moved, and the clock is served from a cache
+                // that does not know. Without this the candidate is given the
+                // time and then never sees it.
+                attemptCache.invalidate(attemptId);
+                log.info("Attempt {} reconnected after a gap; exam time returned.", attemptId);
+                return;
+            }
+
             jdbcTemplate.update(
                     "UPDATE attempts SET last_seen_at = NOW() WHERE id = ? AND status <> 'SUBMITTED'",
                     attemptId);

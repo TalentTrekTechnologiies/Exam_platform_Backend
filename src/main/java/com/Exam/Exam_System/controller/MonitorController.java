@@ -54,6 +54,7 @@ public class MonitorController {
                    a.start_time,
                    a.end_time,
                    a.last_seen_at,
+                   a.extended_seconds,
                    a.submitted_at,
                    a.score,
                    COALESCE(ans.answered, 0)    AS answered,
@@ -140,6 +141,9 @@ public class MonitorController {
             row.put("name", rs.getString("name"));
             row.put("attemptId", rs.getObject("attempt_id"));
             row.put("state", state);
+            // Time returned after a disconnection. Shown so an invigilator asked
+            // why somebody finished late has an answer.
+            row.put("extendedSeconds", rs.getInt("extended_seconds"));
             row.put("answered", rs.getInt("answered"));
             row.put("violations", rs.getInt("violations"));
             row.put("remainingSeconds", remaining);

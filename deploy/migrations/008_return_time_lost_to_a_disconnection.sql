@@ -1,0 +1,43 @@
+-- ============================================================================
+--  Give back the time a disconnection cost
+-- ============================================================================
+--  A candidate whose machine or network drops mid-paper is losing exam time to
+--  a fault that is not theirs, and a fixed deadline charges them for it. When
+--  their browser speaks again after a silence longer than the grace period,
+--  the gap is added back to their deadline.
+--
+--  This column is what was returned, in total. It is kept rather than merely
+--  applied for two reasons, and the first is the important one:
+--
+--    · It is the CAP. Without a ceiling, a candidate who works out that
+--      disconnecting stops their clock has been handed unlimited time with a
+--      textbook. exam.reconnect.max-seconds bounds the total, and this column
+--      is what it is measured against.
+--
+--    · It is the AUDIT. An invigilator asked why one candidate finished eleven
+--      minutes after everybody else deserves an answer, and a silently
+--      extended deadline is not one. The live monitor reads this column.
+--
+--  The slot's close remains a hard ceiling: nothing extends a candidate past
+--  the end of the sitting, however much they were disconnected for.
+--
+--  Existing attempts default to 0, which is exactly right — they were sat
+--  under a fixed deadline and nothing about them changes.
+--
+--  On a FRESH install ddl-auto=update creates this on first boot and this file
+--  is not needed. Run it only to upgrade a database already on
+--  DDL_AUTO=validate, with the application STOPPED.
+-- ============================================================================
+
+ALTER TABLE attempts
+    ADD COLUMN extended_seconds INT NOT NULL DEFAULT 0;
+
+-- ============================================================================
+--  VERIFY
+--      SHOW COLUMNS FROM attempts LIKE 'extended_seconds';
+--      SELECT id, status, extended_seconds FROM attempts
+--       WHERE extended_seconds > 0 ORDER BY extended_seconds DESC LIMIT 20;
+--
+--  TO SWITCH THE FEATURE OFF
+--      exam.reconnect.max-seconds=0  (the column stays; nothing is granted)
+-- ============================================================================

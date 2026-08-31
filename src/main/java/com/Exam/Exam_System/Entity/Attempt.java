@@ -56,6 +56,20 @@ public class Attempt {
     @Column(name = "last_seen_at")
     private LocalDateTime lastSeenAt;
 
+    /**
+     * Seconds of exam time given back after a disconnection, in total.
+     *
+     * A candidate whose machine or network drops is losing time to a fault
+     * that is not theirs, and a fixed deadline charges them for it. This is
+     * what has been returned, kept rather than merely applied for two reasons:
+     * it is the cap -- so the allowance cannot be farmed by disconnecting
+     * repeatedly -- and it is the audit. An invigilator asked why one candidate
+     * finished eleven minutes after everybody else deserves an answer, and a
+     * silently extended deadline is not one.
+     */
+    @Column(name = "extended_seconds", nullable = false)
+    private int extendedSeconds = 0;
+
     private Double score;
 
     public Attempt() {}
@@ -114,6 +128,14 @@ public class Attempt {
 
     public LocalDateTime getLastSeenAt() {
         return lastSeenAt;
+    }
+
+    public int getExtendedSeconds() {
+        return extendedSeconds;
+    }
+
+    public void setExtendedSeconds(int extendedSeconds) {
+        this.extendedSeconds = extendedSeconds;
     }
 
     public void setLastSeenAt(LocalDateTime lastSeenAt) {
