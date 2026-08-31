@@ -94,6 +94,21 @@ public class QuestionService {
         q.setOptionCImage(updated.getOptionCImage());
         q.setOptionDImage(updated.getOptionDImage());
 
+        // The coding half. Copied here for the same reason as everything above:
+        // this method assigns field by field, so anything omitted is silently
+        // kept at its old value — an edit that appears to save and changes
+        // nothing. Type included, or a question could never be converted from
+        // multiple choice into a coding one at all.
+        q.setType(updated.getType());
+        q.setConstraintsText(updated.getConstraintsText());
+        q.setSampleInput(updated.getSampleInput());
+        q.setSampleOutput(updated.getSampleOutput());
+        q.setSampleExplanation(updated.getSampleExplanation());
+        q.setAllowedLanguages(updated.getAllowedLanguages());
+        q.setTimeLimitMs(updated.getTimeLimitMs());
+        q.setMemoryLimitMb(updated.getMemoryLimitMb());
+        q.setStarterCode(updated.getStarterCode());
+
         validate(q);
         return questionRepository.save(q);
     }
@@ -119,6 +134,40 @@ public class QuestionService {
         boolean hasImage = q.getQuestionImage() != null && !q.getQuestionImage().isBlank();
         if (!hasText && !hasImage) {
             throw new IllegalArgumentException("A question needs text or an image.");
+        }
+
+        /*
+         * A coding question is finished here.
+         *
+         * Everything below asks about A, B, C and D, and a program has none of
+         * them: run unchanged, this rejected every coding question ever saved
+         * with "Correct answer must be A, B, C or D" — the feature could not be
+         * authored at all.
+         *
+         * What replaces the answer key is the test cases, and they are a
+         * separate resource written after the question exists. Their absence is
+         * caught at publication, where an exam that cannot be marked is stopped
+         * before anybody sits it.
+         */
+        if (q.isCoding()) {
+            // No options and no key, cleared rather than left behind: a question
+            // converted from multiple choice would otherwise keep four dead
+            // options and a key pointing at one of them.
+            q.setOptionA(null); q.setOptionB(null); q.setOptionC(null); q.setOptionD(null);
+            q.setOptionAImage(null); q.setOptionBImage(null);
+            q.setOptionCImage(null); q.setOptionDImage(null);
+            q.setCorrectAnswer(null);
+            // Partial credit and negative marking do not belong together: marks
+            // are earned per case passed, so there is nothing to deduct from.
+            q.setNegativeMarks(0.0);
+
+            if (q.getTimeLimitMs() != null && q.getTimeLimitMs() <= 0) {
+                throw new IllegalArgumentException("The time limit must be greater than zero.");
+            }
+            if (q.getMemoryLimitMb() != null && q.getMemoryLimitMb() <= 0) {
+                throw new IllegalArgumentException("The memory limit must be greater than zero.");
+            }
+            return;
         }
 
         String correct = q.getCorrectAnswer() == null ? "" : q.getCorrectAnswer().trim().toUpperCase();

@@ -1,0 +1,119 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  Judge0 — the sandbox that runs candidates' programs
+# ─────────────────────────────────────────────────────────────────────────────
+#      docker compose -f docker-compose.judge.yml up -d
+#
+#  Then set judge.provider=judge0 and judge.url=http://127.0.0.1:2358 on the
+#  exam application and restart it.
+#
+#  WHY THIS EXISTS SEPARATELY
+#
+#  A coding round runs strangers' programs on your server. Not untrusted input
+#  to your program -- their program, chosen by them, on your machine. The
+#  application's LocalJudge refuses to start under a production profile for
+#  exactly this reason, and this file is the thing it refuses in favour of.
+#
+#  Judge0 runs each submission under `isolate`, which uses kernel cgroups and
+#  namespaces to cap CPU, memory, wall time, processes and file size, with no
+#  network. That is the boundary. Do not replace it with "we trust our
+#  candidates".
+#
+#  BEFORE YOU RUN THIS ON THE KSRM BOX
+#
+#  It is not free. The workers compile and execute code, and on a 2-core server
+#  already carrying MySQL, the exam application and the college website, a
+#  coding round of any size will be felt by everybody -- including candidates
+#  sitting an ordinary multiple-choice paper at the same time.
+#
+#  Run the numbers before an exam, not during one. One worker handles roughly
+#  one submission at a time; a compile is order-seconds. Fifty candidates all
+#  pressing Run in the same minute is a queue, and the queue is what candidates
+#  experience as the platform being broken.
+#
+#  If a real coding round is planned, put this on its own host and point
+#  judge.url at it. That is the same conclusion the app tier reached, for the
+#  same reason, and it is cheaper than a bad sitting.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: exam-judge
+
+x-judge0: &judge0
+  image: judge0/judge0:1.13.1
+  restart: unless-stopped
+  # isolate needs cgroup and namespace control the container does not otherwise
+  # have. This is why the sandbox is a separate stack on a separate network
+  # rather than something bolted into the exam application's compose file.
+  privileged: true
+  environment:
+    REDIS_HOST: judge-redis
+    REDIS_PASSWORD: ${JUDGE_REDIS_PASSWORD:-judge-redis}
+    POSTGRES_HOST: judge-db
+    POSTGRES_DB: judge0
+    POSTGRES_USER: judge0
+    POSTGRES_PASSWORD: ${JUDGE_DB_PASSWORD:-judge0}
+
+    # Ceilings, enforced per submission. A question may ask for less; it may
+    # never ask for more, so one candidate's runaway loop cannot become
+    # everybody's outage.
+    MAX_CPU_TIME_LIMIT: ${JUDGE_MAX_CPU_SECONDS:-10}
+    MAX_WALL_TIME_LIMIT: ${JUDGE_MAX_WALL_SECONDS:-20}
+    MAX_MEMORY_LIMIT: ${JUDGE_MAX_MEMORY_KB:-512000}
+    MAX_PROCESSES_AND_OR_THREADS: 60
+    # No network from inside a submission. A program that can reach the
+    # internet can fetch its own answer, and can reach your other services.
+    ENABLE_NETWORK: "false"
+    # Nothing here should be reachable from outside this host anyway, but a
+    # token means a mistake in the nginx config is not immediately an open
+    # code-execution endpoint on the public internet.
+    AUTHN_HEADER: X-Auth-Token
+    AUTHN_TOKEN: ${JUDGE_TOKEN:-}
+  depends_on:
+    judge-db:
+      condition: service_healthy
+    judge-redis:
+      condition: service_started
+
+services:
+  server:
+    <<: *judge0
+    # Loopback only. The exam application reaches it at 127.0.0.1:2358; nothing
+    # else has any business talking to a code-execution service.
+    ports:
+      - "127.0.0.1:2358:2358"
+
+  # The processes that actually compile and run submissions. Scale this to
+  # taste -- and to cores, which on the current box means leaving it at one.
+  workers:
+    <<: *judge0
+    command: ["./scripts/workers"]
+    # Deliberately modest. Each worker will happily saturate a core, and this
+    # host has two of them and a college website to serve.
+    mem_limit: ${JUDGE_WORKER_MEM:-1g}
+
+  judge-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: judge0
+      POSTGRES_USER: judge0
+      POSTGRES_PASSWORD: ${JUDGE_DB_PASSWORD:-judge0}
+    volumes:
+      - judge-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U judge0"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    # Never published: only the judge stack talks to it.
+    expose:
+      - "5432"
+
+  judge-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--requirepass", "${JUDGE_REDIS_PASSWORD:-judge-redis}"]
+    expose:
+      - "6379"
+
+volumes:
+  judge-db-data:

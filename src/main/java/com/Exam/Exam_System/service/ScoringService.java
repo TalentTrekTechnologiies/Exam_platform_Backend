@@ -215,7 +215,10 @@ public class ScoringService {
                     sectionNames.get(sid),
                     q.getQuestionText(),
                     q.getQuestionImage(),
-                    paperService.optionsInDisplayOrder(q, aq.getOptionOrder()),
+                    // Guarded the same way the paper itself is: a coding
+                    // question has no options, and asking for them in a
+                    // shuffled order is a question about nothing.
+                    coding ? List.of() : paperService.optionsInDisplayOrder(q, aq.getOptionOrder()),
                     q.getCorrectAnswer(),
                     given,
                     isCorrect,
