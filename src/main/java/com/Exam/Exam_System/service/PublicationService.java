@@ -49,6 +49,7 @@ public class PublicationService {
     private final AttemptRepository attemptRepository;
     private final AdminRepository adminRepository;
     private final TestCaseRepository testCaseRepository;
+    private final com.Exam.Exam_System.service.judge.Judge judge;
 
     public PublicationService(ExamRepository examRepository,
                               QuestionRepository questionRepository,
@@ -57,7 +58,8 @@ public class PublicationService {
                               ExamStudentRepository examStudentRepository,
                               AttemptRepository attemptRepository,
                               AdminRepository adminRepository,
-                              TestCaseRepository testCaseRepository) {
+                              TestCaseRepository testCaseRepository,
+                              com.Exam.Exam_System.service.judge.Judge judge) {
         this.examRepository = examRepository;
         this.questionRepository = questionRepository;
         this.sectionRepository = sectionRepository;
@@ -66,6 +68,7 @@ public class PublicationService {
         this.attemptRepository = attemptRepository;
         this.adminRepository = adminRepository;
         this.testCaseRepository = testCaseRepository;
+        this.judge = judge;
     }
 
     /** Full readiness picture: counts, blockers, warnings, and the candidate link. */
@@ -142,6 +145,22 @@ public class PublicationService {
         long unmarkable = questions.stream().filter(this::isUnmarkable).count();
         if (unmarkable > 0) {
             blockers.add(unmarkable + " question(s) could not be marked — a multiple-choice question whose keyed option is blank, or a coding question with no test cases.");
+        }
+
+        /*
+         * A coding paper with nowhere to run code.
+         *
+         * A blocker rather than a warning, because the failure lands on the
+         * candidate and lands late: they sit down, read the problem, write a
+         * solution, press Run, and are told the judge is unavailable. There is
+         * no recovering that mid-sitting, and the exam officer publishing the
+         * paper is the last person able to prevent it.
+         */
+        long codingCount = questions.stream().filter(Question::isCoding).count();
+        if (codingCount > 0 && !judge.available()) {
+            blockers.add(codingCount + " coding question(s) are on this paper, but no code judge is"
+                    + " configured — candidates could not run or submit a program. Deploy Judge0"
+                    + " (deploy/docker-compose.judge.yml) and set judge.provider=judge0.");
         }
 
         if (candidates == 0) {

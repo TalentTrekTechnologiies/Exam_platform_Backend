@@ -113,6 +113,119 @@ class ScoringServiceTest {
         when(paperService.optionsInDisplayOrder(any(), anyString())).thenReturn(List.of());
     }
 
+
+    /** A coding question: no options, no key, marked by test cases. */
+    private Question codingQuestion(long id, int marks) {
+        Question q = new Question();
+        q.setExamId(1L);
+        q.setSectionId(10L);
+        q.setType("CODING");
+        q.setQuestionText("Sum the array");
+        q.setMarks(marks);
+        // Deliberately non-zero: a coding question must never be marked down,
+        // and setting it here is what proves the scorer ignores it rather than
+        // that nobody happened to set it.
+        q.setNegativeMarks(2.0);
+        try {
+            var f = Question.class.getDeclaredField("id");
+            f.setAccessible(true);
+            f.set(q, id);
+        } catch (ReflectiveOperationException e) {
+            throw new IllegalStateException(e);
+        }
+        return q;
+    }
+
+    /** A judged coding answer, as CodingController stores it. */
+    private Answer codingAnswer(long questionId, int passed, int total, double awarded) {
+        Answer a = new Answer();
+        a.setAttemptId(ATTEMPT);
+        a.setQuestionId(questionId);
+        a.setSelectedOption("python");   // what marks it attempted for the palette
+        a.setSourceCode("print(sum(...))");
+        a.setLanguage("python");
+        a.setTestsPassed(passed);
+        a.setTestsTotal(total);
+        a.setAwardedMarks(awarded);
+        a.setIsCorrect(total > 0 && passed == total);
+        return a;
+    }
+
+    // ── the coding round ────────────────────────────────────────────────────
+
+    @Test
+    @DisplayName("Coding: the judge's marks are taken as given, not recomputed")
+    void codingMarksAreTakenFromTheJudge() {
+        List<Question> qs = List.of(codingQuestion(1, 10));
+        // Six of ten cases passed, judged at 6 marks.
+        givenPaper(qs, List.of(codingAnswer(1, 6, 10, 6.0)), "STARTED");
+
+        Attempt graded = scoring.submit(ATTEMPT, "test");
+        assertEquals(6.0, graded.getScore(), 0.001);
+    }
+
+    @Test
+    @DisplayName("Coding: partial credit survives — a half-right program is not zero")
+    void codingPartialCredit() {
+        List<Question> qs = List.of(codingQuestion(1, 10), codingQuestion(2, 10));
+        givenPaper(qs, List.of(codingAnswer(1, 5, 10, 5.0), codingAnswer(2, 10, 10, 10.0)), "STARTED");
+
+        Attempt graded = scoring.submit(ATTEMPT, "test");
+        assertEquals(15.0, graded.getScore(), 0.001);
+    }
+
+    @Test
+    @DisplayName("Coding: a program that passes nothing scores zero, never a penalty")
+    void codingNeverGoesNegative() {
+        List<Question> qs = List.of(codingQuestion(1, 10));
+        // Every case failed. negativeMarks is 2.0 on the question and must not
+        // apply: a candidate who attempts a hard problem and gets it wrong must
+        // not finish worse off than one who left it blank.
+        givenPaper(qs, List.of(codingAnswer(1, 0, 10, 0.0)), "STARTED");
+
+        Attempt graded = scoring.submit(ATTEMPT, "test");
+        assertEquals(0.0, graded.getScore(), 0.001);
+    }
+
+    @Test
+    @DisplayName("Coding: an unattempted question scores zero and does not throw")
+    void codingUnattempted() {
+        List<Question> qs = List.of(codingQuestion(1, 10));
+        givenPaper(qs, List.of(), "STARTED");
+
+        Attempt graded = scoring.submit(ATTEMPT, "test");
+        assertEquals(0.0, graded.getScore(), 0.001);
+    }
+
+    @Test
+    @DisplayName("Coding: an answer saved but never judged scores zero rather than null")
+    void codingSavedButUnjudged() {
+        List<Question> qs = List.of(codingQuestion(1, 10));
+        // Code was written and stored, but no judgement came back — a judge
+        // that was down when they pressed Submit. It must not be counted, and
+        // it must not blow up the whole scorecard either.
+        Answer unjudged = codingAnswer(1, 0, 0, 0.0);
+        unjudged.setAwardedMarks(null);
+        givenPaper(qs, List.of(unjudged), "STARTED");
+
+        Attempt graded = scoring.submit(ATTEMPT, "test");
+        assertEquals(0.0, graded.getScore(), 0.001);
+    }
+
+    @Test
+    @DisplayName("A mixed paper adds coding marks to multiple-choice marks")
+    void mixedPaper() {
+        // NEET marking on the MCQ half: +4 right, -1 wrong.
+        List<Question> qs = List.of(question(1, 4, 1.0), question(2, 4, 1.0), codingQuestion(3, 10));
+        givenPaper(qs,
+                List.of(answer(1, "A"), answer(2, "B"), codingAnswer(3, 7, 10, 7.0)),
+                "STARTED");
+
+        // 4 - 1 + 7 = 10
+        Attempt graded = scoring.submit(ATTEMPT, "test");
+        assertEquals(10.0, graded.getScore(), 0.001);
+    }
+
     // ── the three marking schemes ───────────────────────────────────────────
 
     @Test
