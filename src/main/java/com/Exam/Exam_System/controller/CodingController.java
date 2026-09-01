@@ -9,7 +9,9 @@ import com.Exam.Exam_System.repository.QuestionRepository;
 import com.Exam.Exam_System.repository.TestCaseRepository;
 import com.Exam.Exam_System.security.AccessGuard;
 import com.Exam.Exam_System.service.judge.CodeExecutionService;
+import com.Exam.Exam_System.service.SectionClockService;
 import com.Exam.Exam_System.service.judge.Language;
+import com.Exam.Exam_System.service.judge.RunThrottle;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -35,16 +37,23 @@ public class CodingController {
     private final AccessGuard accessGuard;
     private final CodeExecutionService execution;
 
+    private final RunThrottle runThrottle;
+    private final SectionClockService sectionClock;
+
     public CodingController(QuestionRepository questions,
                             TestCaseRepository testCases,
                             AnswerRepository answers,
                             AccessGuard accessGuard,
-                            CodeExecutionService execution) {
+                            CodeExecutionService execution,
+                            RunThrottle runThrottle,
+                            SectionClockService sectionClock) {
         this.questions = questions;
         this.testCases = testCases;
         this.answers = answers;
         this.accessGuard = accessGuard;
         this.execution = execution;
+        this.runThrottle = runThrottle;
+        this.sectionClock = sectionClock;
     }
 
     // ── Staff: writing the problem ──────────────────────────────────────────
@@ -177,6 +186,25 @@ public class CodingController {
                     "message", "Write some code first."));
         }
 
+        /*
+         * Refused before the judge is asked for anything, so a run that is too
+         * soon costs no CPU at all. Compile & Run is the only place a candidate
+         * can spend the server's processor at will, and at exam scale a handful
+         * of people holding the button decides how long everybody else waits.
+         */
+        attempt = sectionClock.advanceIfDue(attempt);
+        if (!sectionClock.isOpen(attempt, question.getSectionId())) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("message", "This section has ended."));
+        }
+
+        try {
+            runThrottle.recordOrRefuse(attempt.getId());
+        } catch (RunThrottle.TooSoonException e) {
+            return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .body(Map.of("message", e.getMessage(), "retryAfterSeconds", e.getSecondsToWait()));
+        }
+
         CodeExecutionService.Judgement judgement = execution.runSamples(question, language, source);
 
         Map<String, Object> out = new LinkedHashMap<>();
@@ -216,6 +244,21 @@ public class CodingController {
 
         if (source == null || source.isBlank()) {
             throw new IllegalArgumentException("There is nothing to submit.");
+        }
+
+        /*
+         * A coding section that has closed is closed to code.
+         *
+         * The multiple-choice path checks this and this one did not, which left
+         * the whole sectional lock with a hole in it exactly where it matters
+         * most: the coding round is the section most worth stealing time for,
+         * and a candidate who kept the page open could have gone on submitting
+         * into it after their time was up.
+         */
+        attempt = sectionClock.advanceIfDue(attempt);
+        if (!sectionClock.isOpen(attempt, question.getSectionId())) {
+            return ResponseEntity.status(HttpStatus.CONFLICT)
+                    .body(Map.of("message", "This section has ended. Your last submission stands."));
         }
 
         CodeExecutionService.Judgement judgement = execution.judge(question, language, source);
