@@ -39,6 +39,22 @@ public class Section {
     @Column(name = "questions_to_draw")
     private Integer questionsToDraw;
 
+    /**
+     * Minutes a candidate gets for this section alone, or null for a paper with
+     * one clock for the whole thing.
+     *
+     * Setting it on every section of an exam turns it into a sectional paper:
+     * the sections are sat in order, each with its own countdown, and a section
+     * whose time is up is closed and cannot be returned to. That lock is the
+     * point — it is what TCS NQT actually is, and a "sectional" exam a
+     * candidate can drift back into is not one.
+     *
+     * Left null everywhere, nothing changes: one clock, free navigation, which
+     * is what EAMCET and NEET want and what every existing exam does.
+     */
+    @Column(name = "duration_minutes")
+    private Integer durationMinutes;
+
     public Section() {}
 
     public Long getId() {
@@ -72,6 +88,14 @@ public class Section {
 
     public Integer getQuestionsToDraw() {
         return questionsToDraw;
+    }
+
+    public Integer getDurationMinutes() {
+        return durationMinutes;
+    }
+
+    public void setDurationMinutes(Integer durationMinutes) {
+        this.durationMinutes = durationMinutes;
     }
 
     public void setQuestionsToDraw(Integer questionsToDraw) {

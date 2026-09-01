@@ -44,6 +44,7 @@ public class AttemptService {
     private final AttemptCache attemptCache;
     private final ExamStudentRepository examStudentRepository;
     private final JdbcTemplate jdbcTemplate;
+    private final SectionClockService sectionClock;
 
     /**
      * How long a silence has to last before it counts as a disconnection.
@@ -78,7 +79,8 @@ public class AttemptService {
                           ScoringService scoringService,
                           AttemptCache attemptCache,
                           ExamStudentRepository examStudentRepository,
-                          JdbcTemplate jdbcTemplate) {
+                          JdbcTemplate jdbcTemplate,
+                          SectionClockService sectionClock) {
         this.attemptRepository = attemptRepository;
         this.examRepository = examRepository;
         this.slotRepository = slotRepository;
@@ -87,6 +89,7 @@ public class AttemptService {
         this.attemptCache = attemptCache;
         this.examStudentRepository = examStudentRepository;
         this.jdbcTemplate = jdbcTemplate;
+        this.sectionClock = sectionClock;
     }
 
     /**
@@ -146,6 +149,7 @@ public class AttemptService {
         }
 
         paperService.buildPaper(attempt.getId(), examId);
+        sectionClock.beginFirstSection(attempt);
         return attempt;
     }
 
@@ -182,6 +186,10 @@ public class AttemptService {
         // Cheap insurance in case preparation was interrupted before this
         // candidate's paper was written; a no-op in the normal case.
         paperService.buildPaper(attempt.getId(), examId);
+
+        // The first section opens as the paper's own clock does. On an exam
+        // that is not sectional this does nothing at all.
+        sectionClock.beginFirstSection(attempt);
         return attempt;
     }
 
@@ -252,6 +260,13 @@ public class AttemptService {
                 ? "There are no candidates on this exam yet."
                 : String.join("; ", parts) + ".");
         return report;
+    }
+
+    /** One attempt, by id. Used by the clock poll to read its section state. */
+    @Transactional(readOnly = true)
+    public Attempt getById(Long attemptId) {
+        return attemptRepository.findById(attemptId)
+                .orElseThrow(() -> new NoSuchElementException("Attempt not found"));
     }
 
     @Transactional(readOnly = true)

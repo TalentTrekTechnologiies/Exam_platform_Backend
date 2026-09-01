@@ -37,6 +37,7 @@ public class StudentController {
     private final ProctoringService proctoringService;
     private final SessionWatch sessionWatch;
     private final ProctorFrameService proctorFrameService;
+    private final SectionClockService sectionClock;
 
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(StudentController.class);
@@ -54,7 +55,8 @@ public class StudentController {
                              AccessGuard accessGuard,
                              ProctoringService proctoringService,
                              SessionWatch sessionWatch,
-                             ProctorFrameService proctorFrameService) {
+                             ProctorFrameService proctorFrameService,
+                             SectionClockService sectionClock) {
         this.sessionWatch = sessionWatch;
         this.proctorFrameService = proctorFrameService;
         this.studentService = studentService;
@@ -69,6 +71,7 @@ public class StudentController {
         this.currentUser = currentUser;
         this.accessGuard = accessGuard;
         this.proctoringService = proctoringService;
+        this.sectionClock = sectionClock;
     }
 
     /**
@@ -414,6 +417,20 @@ public class StudentController {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("remainingSeconds", remaining);
         data.put("expired", remaining == 0);
+
+        /*
+         * The sectional clock rides along with the paper's own.
+         *
+         * Advancing here rather than on a schedule means the boundary is
+         * decided by the server but driven by the candidate's own poll — no
+         * background job walking every live attempt, and a section closes
+         * within twenty seconds of when it should. On an exam that is not
+         * sectional every line below is a no-op.
+         */
+        Attempt attempt = attemptService.getById(attemptId);
+        if (attempt.getCurrentSectionId() != null) {
+            data.putAll(sectionClock.stateFor(sectionClock.advanceIfDue(attempt)));
+        }
         return data;
     }
 

@@ -163,6 +163,38 @@ public class PublicationService {
                     + " (deploy/docker-compose.judge.yml) and set judge.provider=judge0.");
         }
 
+        /*
+         * A half-specified sectional paper.
+         *
+         * Sectional timing is all or nothing: it needs a duration on EVERY
+         * section, because a section without one has no boundary to close at.
+         * Setting it on two of three reads as a sectional exam and behaves as
+         * an ordinary one, which is the worst of both — an exam officer who
+         * believes the coding section is locked and finds it was not.
+         */
+        List<Section> examSections = sectionRepository.findByExamId(exam.getId());
+        long timed = examSections.stream()
+                .filter(x -> x.getDurationMinutes() != null && x.getDurationMinutes() > 0).count();
+        if (timed > 0 && timed < examSections.size()) {
+            blockers.add((examSections.size() - timed) + " section(s) have no time limit while "
+                    + timed + " do. Sectional timing needs a limit on every section, or none —"
+                    + " as it stands the sections would not lock at all.");
+        }
+
+        if (timed > 0 && timed == examSections.size() && exam.getDuration() != null) {
+            int sectionTotal = examSections.stream()
+                    .mapToInt(Section::getDurationMinutes).sum();
+            if (sectionTotal > exam.getDuration()) {
+                warnings.add("The sections add up to " + sectionTotal + " minutes but the paper is "
+                        + exam.getDuration() + ". The last section will be cut short when the"
+                        + " paper's own clock runs out.");
+            } else if (sectionTotal < exam.getDuration()) {
+                warnings.add("The sections add up to " + sectionTotal + " minutes and the paper is "
+                        + exam.getDuration() + ", so candidates finish " + (exam.getDuration() - sectionTotal)
+                        + " minutes early. Set the paper's duration to match if that is not intended.");
+            }
+        }
+
         if (candidates == 0) {
             warnings.add("No candidates are enrolled yet. You can publish now and enrol them later.");
         }

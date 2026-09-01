@@ -70,6 +70,26 @@ public class Attempt {
     @Column(name = "extended_seconds", nullable = false)
     private int extendedSeconds = 0;
 
+    /**
+     * The section this candidate is currently in, on a sectional paper.
+     *
+     * Null on an ordinary paper, which is every exam that does not set a
+     * duration on its sections.
+     */
+    @Column(name = "current_section_id")
+    private Long currentSectionId;
+
+    /**
+     * When the current section closes.
+     *
+     * Server-owned for the same reason the paper's own deadline is: a sectional
+     * lock a candidate's browser could decide the timing of is not a lock. The
+     * clock poll is what advances it, so a candidate who closes their laptop
+     * during section one does not find section two waiting for them.
+     */
+    @Column(name = "section_ends_at")
+    private LocalDateTime sectionEndsAt;
+
     private Double score;
 
     public Attempt() {}
@@ -132,6 +152,22 @@ public class Attempt {
 
     public int getExtendedSeconds() {
         return extendedSeconds;
+    }
+
+    public Long getCurrentSectionId() {
+        return currentSectionId;
+    }
+
+    public void setCurrentSectionId(Long currentSectionId) {
+        this.currentSectionId = currentSectionId;
+    }
+
+    public LocalDateTime getSectionEndsAt() {
+        return sectionEndsAt;
+    }
+
+    public void setSectionEndsAt(LocalDateTime sectionEndsAt) {
+        this.sectionEndsAt = sectionEndsAt;
     }
 
     public void setExtendedSeconds(int extendedSeconds) {

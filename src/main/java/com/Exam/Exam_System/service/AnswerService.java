@@ -53,17 +53,20 @@ public class AnswerService {
     private final AttemptQuestionRepository attemptQuestionRepository;
     private final ScoringService scoringService;
     private final JdbcTemplate jdbcTemplate;
+    private final SectionClockService sectionClock;
 
     public AnswerService(AnswerRepository answerRepository,
                          AttemptRepository attemptRepository,
                          AttemptQuestionRepository attemptQuestionRepository,
                          ScoringService scoringService,
-                         JdbcTemplate jdbcTemplate) {
+                         JdbcTemplate jdbcTemplate,
+                         SectionClockService sectionClock) {
         this.answerRepository = answerRepository;
         this.attemptRepository = attemptRepository;
         this.attemptQuestionRepository = attemptQuestionRepository;
         this.scoringService = scoringService;
         this.jdbcTemplate = jdbcTemplate;
+        this.sectionClock = sectionClock;
     }
 
     /**
@@ -81,6 +84,18 @@ public class AnswerService {
             throw new IllegalArgumentException("INVALID_OPTION");
         }
 
+        /*
+         * On a sectional paper, a section whose time is up is closed.
+         *
+         * Enforced here rather than only in the browser, because a lock the
+         * candidate's own machine decides is not a lock: the paper is already
+         * loaded, the question ids are already known, and one request replayed
+         * after the section closed would otherwise be accepted. The whole
+         * reason the format exists is to stop time being moved between
+         * sections.
+         */
+        refuseIfSectionClosed(attemptId, questionId);
+
         int affected = jdbcTemplate.update(UPSERT, normalized, questionId, attemptId, studentId);
 
         // Nothing written means either a guard rejected it, or the candidate
@@ -90,6 +105,32 @@ public class AnswerService {
             explainRejection(attemptId, studentId, questionId);
         }
         return normalized;
+    }
+
+    /**
+     * Rejects a write to a section the candidate has already been moved past.
+     *
+     * Costs one read of the attempt and one of the question's section, and only
+     * on a paper that is actually sectional — an ordinary exam returns after
+     * the first check with nothing loaded.
+     */
+    private void refuseIfSectionClosed(Long attemptId, Long questionId) {
+        Attempt attempt = attemptRepository.findById(attemptId).orElse(null);
+        if (attempt == null || attempt.getCurrentSectionId() == null) return;
+
+        // The clock poll normally moves the boundary, but an answer can arrive
+        // between polls; advancing here means the section that closed a moment
+        // ago is closed for this write too.
+        attempt = sectionClock.advanceIfDue(attempt);
+
+        Long sectionId = jdbcTemplate.query(
+                "SELECT section_id FROM questions WHERE id = ?",
+                rs -> rs.next() ? (Long) rs.getObject("section_id") : null,
+                questionId);
+
+        if (!sectionClock.isOpen(attempt, sectionId)) {
+            throw new IllegalStateException("SECTION_CLOSED");
+        }
     }
 
     /**

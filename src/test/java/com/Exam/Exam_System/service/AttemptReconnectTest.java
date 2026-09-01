@@ -44,6 +44,7 @@ class AttemptReconnectTest {
     @Mock AttemptCache attemptCache;
     @Mock ExamStudentRepository examStudentRepository;
     @Mock JdbcTemplate jdbcTemplate;
+    @Mock SectionClockService sectionClock;
 
     AttemptService attempts;
 
@@ -54,7 +55,8 @@ class AttemptReconnectTest {
     @BeforeEach
     void setUp() throws Exception {
         attempts = new AttemptService(attemptRepository, examRepository, slotRepository,
-                paperService, scoringService, attemptCache, examStudentRepository, jdbcTemplate);
+                paperService, scoringService, attemptCache, examStudentRepository, jdbcTemplate,
+                sectionClock);
         // @Value fields are Spring's job; this is a plain unit test.
         set("reconnectGraceSeconds", GRACE);
         set("reconnectMaxSeconds", CAP);
