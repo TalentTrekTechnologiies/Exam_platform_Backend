@@ -29,6 +29,7 @@ public class ExamController {
     private final AttemptService attemptService;
     private final PublicationService publicationService;
     private final SlotRepository slotRepository;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(ExamController.class);
@@ -39,7 +40,8 @@ public class ExamController {
                           AccessGuard accessGuard,
                           AttemptService attemptService,
                           PublicationService publicationService,
-                          SlotRepository slotRepository) {
+                          SlotRepository slotRepository,
+                          org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.slotRepository = slotRepository;
         this.examRepository = examRepository;
         this.adminRepository = adminRepository;
@@ -47,6 +49,7 @@ public class ExamController {
         this.accessGuard = accessGuard;
         this.attemptService = attemptService;
         this.publicationService = publicationService;
+        this.jdbc = jdbc;
     }
 
     @PostMapping
@@ -224,5 +227,76 @@ public class ExamController {
         exam.setEnableMic(updated.isEnableMic());
 
         return examRepository.save(exam);
+    }
+
+    /**
+     * Deletes an exam, and everything that only existed because of it.
+     *
+     * Refused the moment anybody has actually sat it. Deleting a paper takes
+     * every candidate's answers and marks with it, and there is no undo — the
+     * same reason removing a candidate keeps their results rather than erasing
+     * them. A finished exam is a record, not clutter. Unpublish it instead; it
+     * disappears from candidates without disappearing from Results.
+     *
+     * What it IS for is the exam built by mistake: a test paper, a duplicate, a
+     * draft nobody sat. Those are common, and having no way to remove them
+     * leaves an exam list nobody trusts.
+     *
+     * Deleted in dependency order, so a failure part-way leaves nothing
+     * referring to a row that has gone.
+     */
+    @DeleteMapping("/{examId}")
+    public Map<String, Object> deleteExam(@PathVariable Long examId) {
+        accessGuard.requireOwnedExam(examId);
+
+        Integer sat = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM attempts WHERE exam_id = ? AND status <> 'PENDING'",
+                Integer.class, examId);
+        if (sat != null && sat > 0) {
+            throw new IllegalStateException(
+                    sat + " candidate(s) have already sat this exam, so deleting it would erase"
+                    + " their answers and marks. Unpublish it instead — it disappears from"
+                    + " candidates without disappearing from Results.");
+        }
+
+        // Prepared papers and the answers against them. Only PENDING attempts
+        // can exist at this point; the check above guarantees it.
+        jdbc.update("""
+                DELETE aq FROM attempt_questions aq
+                  JOIN attempts a ON a.id = aq.attempt_id
+                 WHERE a.exam_id = ?
+                """, examId);
+        jdbc.update("""
+                DELETE ans FROM answers ans
+                  JOIN attempts a ON a.id = ans.attempt_id
+                 WHERE a.exam_id = ?
+                """, examId);
+        jdbc.update("""
+                DELETE v FROM exam_violations v
+                  JOIN attempts a ON a.id = v.attempt_id
+                 WHERE a.exam_id = ?
+                """, examId);
+        jdbc.update("DELETE FROM attempts WHERE exam_id = ?", examId);
+
+        // The paper itself. Test cases first: nothing else refers to them, so
+        // they would otherwise be rows with no way back to them.
+        jdbc.update("""
+                DELETE tc FROM test_cases tc
+                  JOIN questions q ON q.id = tc.question_id
+                 WHERE q.exam_id = ?
+                """, examId);
+        jdbc.update("DELETE FROM questions WHERE exam_id = ?", examId);
+        jdbc.update("DELETE FROM sections WHERE exam_id = ?", examId);
+
+        // The sitting: who was on it, and when it ran.
+        jdbc.update("DELETE FROM exam_student WHERE exam_id = ?", examId);
+        jdbc.update("DELETE FROM exam_slots WHERE exam_id = ?", examId);
+
+        examRepository.deleteById(examId);
+
+        Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("deleted", true);
+        out.put("examId", examId);
+        return out;
     }
 }
