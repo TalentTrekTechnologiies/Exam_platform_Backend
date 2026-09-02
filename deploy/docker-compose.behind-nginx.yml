@@ -68,9 +68,11 @@ x-app: &app
       # variables into containers -- so anything the application reads has to
       # be listed here or it never arrives.
       JUDGE_PROVIDER: ${JUDGE_PROVIDER:-none}
-      # Not 127.0.0.1: that is this container, not the host. The docker bridge
-      # gateway is how the app reaches a judge published on the host's loopback.
-      JUDGE_URL: ${JUDGE_URL:-http://172.17.0.1:2358}
+      # The judge stack joins this network as `judge0`, so this is a container
+      # talking to a container. Anything routed via the host -- 127.0.0.1 is
+      # this container, and the bridge gateway cannot reach a port published on
+      # the host's loopback -- hangs until it times out instead.
+      JUDGE_URL: ${JUDGE_URL:-http://judge0:2358}
       JUDGE_TOKEN: ${JUDGE_TOKEN:-}
       JUDGE_RUN_MIN_INTERVAL: ${JUDGE_RUN_MIN_INTERVAL:-5}
       JUDGE_RUN_MAX_PER_ATTEMPT: ${JUDGE_RUN_MAX_PER_ATTEMPT:-400}

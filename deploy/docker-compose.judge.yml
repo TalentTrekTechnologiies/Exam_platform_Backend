@@ -76,10 +76,20 @@ x-judge0: &judge0
 services:
   server:
     <<: *judge0
-    # Loopback only. The exam application reaches it at 127.0.0.1:2358; nothing
-    # else has any business talking to a code-execution service.
+    # Published on loopback for a human with an SSH session to curl. This is
+    # NOT how the exam application reaches it: a port published on 127.0.0.1 is
+    # bound to the host's loopback only, and a container connecting to the
+    # bridge gateway is on a different interface entirely -- it hangs until it
+    # times out, which is exactly what it did.
     ports:
       - "127.0.0.1:2358:2358"
+    networks:
+      default:
+      # The application's own network, joined as `judge0`. Container to
+      # container, so no host interface and no firewall rule is involved.
+      exam:
+        aliases:
+          - judge0
 
   # The processes that actually compile and run submissions. Scale this to
   # taste -- and to cores, which on the current box means leaving it at one.
@@ -114,6 +124,13 @@ services:
     command: ["redis-server", "--requirepass", "${JUDGE_REDIS_PASSWORD:-judge-redis}"]
     expose:
       - "6379"
+
+networks:
+  # Created by the exam stack, joined here. Override EXAM_NETWORK if that
+  # compose project is named something other than exam-platform.
+  exam:
+    external: true
+    name: ${EXAM_NETWORK:-exam-platform_default}
 
 volumes:
   judge-db-data:
