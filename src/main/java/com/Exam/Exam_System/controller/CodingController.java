@@ -226,7 +226,13 @@ public class CodingController {
                     .body(Map.of("message", e.getMessage(), "retryAfterSeconds", e.getSecondsToWait()));
         }
 
-        CodeExecutionService.Judgement judgement = execution.runSamples(question, language, source);
+        // Custom input when the candidate supplied some, sample cases otherwise.
+        // Their own input never touches a test case, so Run cannot be used to
+        // discover the key however many times it is pressed.
+        String custom = str(body.get("stdin"));
+        CodeExecutionService.Judgement judgement = custom != null && !custom.isEmpty()
+                ? execution.runCustom(question, language, source, custom)
+                : execution.runSamples(question, language, source);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("passed", judgement.passed());

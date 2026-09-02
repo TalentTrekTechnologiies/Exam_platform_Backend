@@ -112,6 +112,37 @@ public class CodeExecutionService {
     }
 
     /**
+     * One run against input the candidate typed themselves.
+     *
+     * What "Run" means on every platform they have used, and the thing a
+     * printed sample case cannot do: try the edge case you are worried about.
+     * Nothing is stored and nothing is marked -- and it never touches a test
+     * case, so it cannot be used to probe the key.
+     */
+    public Judgement runCustom(Question question, String language, String source, String stdin) {
+        int timeLimit = question.getTimeLimitMs() == null ? DEFAULT_TIME_LIMIT_MS : question.getTimeLimitMs();
+        int memoryLimit = question.getMemoryLimitMb() == null ? DEFAULT_MEMORY_LIMIT_MB : question.getMemoryLimitMb();
+
+        RunResult run = judge.run(language, source, stdin == null ? "" : stdin, timeLimit, memoryLimit);
+
+        // Reported as one case with no expectation attached: there is nothing
+        // to be right or wrong against, only output to look at.
+        CaseResult only = new CaseResult(
+                null, "Your input", true, run.ran(),
+                run.ran() ? "Ran" : run.humanStatus(),
+                stdin, null, run.stdout(), errorText(run), run.timeMs());
+
+        return new Judgement(0, 0, 0,
+                run.ran() ? "Ran against your input." : run.humanStatus(), List.of(only));
+    }
+
+    /** Whichever of the two error streams actually says something. */
+    private static String errorText(RunResult run) {
+        String compile = blankToNull(run.compileOutput());
+        return compile != null ? compile : run.stderr();
+    }
+
+    /**
      * The same run, with everything shown.
      *
      * For the staff check against a reference solution, where the whole point
