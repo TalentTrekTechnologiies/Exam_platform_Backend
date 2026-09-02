@@ -170,7 +170,8 @@ public class CodeExecutionService {
                     testCase.getLabel(),
                     testCase.isSample(),
                     ok,
-                    ok ? "Passed" : run.ran() ? "Wrong answer" : run.humanStatus(),
+                    ok ? "Passed" : run.ran() ? describeMismatch(run.stdout(), testCase.getExpectedOutput())
+                            : run.humanStatus(),
                     reveal ? testCase.getInput() : null,
                     reveal ? testCase.getExpectedOutput() : null,
                     reveal ? run.stdout() : null,
@@ -185,6 +186,28 @@ public class CodeExecutionService {
 
         return new Judgement(passed, cases.size(), round(marks),
                 message != null ? message : summarise(passed, cases.size()), results);
+    }
+
+    /**
+     * Why a case failed, when the reason is invisible.
+     *
+     * Leading whitespace in an expected output is a stray space in a textarea:
+     * it looks identical to the correct value, marks every correct program as
+     * failed, and a setter comparing the two columns by eye sees "0" and "0"
+     * and concludes the platform is broken.
+     *
+     * The comparison stays strict -- leading spaces are meaningful in aligned
+     * output, and trimming them would pass genuinely wrong answers. It just
+     * says which kind of wrong this is.
+     */
+    private static String describeMismatch(String actual, String expected) {
+        String a = actual == null ? "" : actual;
+        String e = expected == null ? "" : expected;
+        if (!a.equals(e) && a.trim().equals(e.trim())) {
+            return "Wrong answer — only the spacing differs. Check for a stray space "
+                    + "or tab at the start of the expected output.";
+        }
+        return "Wrong answer";
     }
 
     private static String summarise(int passed, int total) {
