@@ -161,7 +161,9 @@ public class CodingController {
             throw new IllegalArgumentException("Paste a reference solution to check the test cases against.");
         }
 
-        CodeExecutionService.Judgement judgement = execution.judge(question, language, source);
+        // Revealing: this is the setter's own key, and the entire purpose of the
+        // screen is to show which case disagrees and what it produced instead.
+        CodeExecutionService.Judgement judgement = execution.verify(question, language, source);
 
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("passed", judgement.passed());

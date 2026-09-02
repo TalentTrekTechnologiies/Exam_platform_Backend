@@ -111,6 +111,27 @@ public class CodeExecutionService {
         return execute(question, language, source, all, false);
     }
 
+    /**
+     * The same run, with everything shown.
+     *
+     * For the staff check against a reference solution, where the whole point
+     * is seeing which case disagrees and how. Hiding inputs and outputs is a
+     * protection for CANDIDATES -- applied to the setter it turned the one
+     * screen built to diagnose a wrong answer key into a row of empty boxes
+     * saying nothing agreed.
+     *
+     * Never reachable by a candidate: the only caller is behind the admin
+     * ownership check on the question.
+     */
+    public Judgement verify(Question question, String language, String source) {
+        List<TestCase> all = testCases.findByQuestionIdOrderByDisplayOrderAscIdAsc(question.getId());
+        if (all.isEmpty()) {
+            return new Judgement(0, 0, 0,
+                    "This question has no test cases yet, so there is nothing to check against.", List.of());
+        }
+        return execute(question, language, source, all, true);
+    }
+
     private Judgement execute(Question question, String language, String source,
                               List<TestCase> cases, boolean reveal) {
 
