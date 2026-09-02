@@ -144,10 +144,25 @@ public class Judge0Judge implements Judge {
         return Base64.getEncoder().encodeToString(s.getBytes(StandardCharsets.UTF_8));
     }
 
-    private static String unb64(String s) {
+    /**
+     * Decodes what Judge0 sends back, whitespace and all.
+     *
+     * Judge0 pads its base64 values with a trailing newline, and Java's strict
+     * decoder treats that as an invalid character and throws. The fallback then
+     * returned the raw text -- so a program that printed 6 was compared as the
+     * literal string "Ngo=" against the expected "6", every case failed, and
+     * the marking looked broken while the sandbox, the network and the
+     * candidate's program were all working perfectly.
+     *
+     * Whitespace is stripped before decoding rather than switching to the MIME
+     * decoder, which would silently turn genuinely plain text into rubbish
+     * instead of throwing and letting the fallback do its job.
+     */
+    static String unb64(String s) {
         if (s == null || s.isBlank() || "null".equals(s)) return "";
         try {
-            return new String(Base64.getDecoder().decode(s), StandardCharsets.UTF_8);
+            return new String(Base64.getDecoder().decode(s.replaceAll("\\s", "")),
+                    StandardCharsets.UTF_8);
         } catch (IllegalArgumentException e) {
             return s;   // already plain
         }
