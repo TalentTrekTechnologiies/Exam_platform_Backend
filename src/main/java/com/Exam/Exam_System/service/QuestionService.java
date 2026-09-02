@@ -290,6 +290,21 @@ public class QuestionService {
             copy.setMarks(src.getMarks());
             copy.setNegativeMarks(src.getNegativeMarks());
 
+            // The coding half. Without it a reused coding question arrived as
+            // an MCQ with no options and no key -- rejected by validation if
+            // you were lucky, and an unanswerable question on the paper if you
+            // were not. Its test cases are copied after the save, once the new
+            // question has an id to hang them on.
+            copy.setType(src.getType());
+            copy.setConstraintsText(src.getConstraintsText());
+            copy.setSampleInput(src.getSampleInput());
+            copy.setSampleOutput(src.getSampleOutput());
+            copy.setSampleExplanation(src.getSampleExplanation());
+            copy.setAllowedLanguages(src.getAllowedLanguages());
+            copy.setTimeLimitMs(src.getTimeLimitMs());
+            copy.setMemoryLimitMb(src.getMemoryLimitMb());
+            copy.setStarterCode(src.getStarterCode());
+
             if (src.getSectionId() != null) {
                 String name = sourceSectionNames.computeIfAbsent(src.getSectionId(),
                         sid -> sectionRepository.findById(sid).map(Section::getName).orElse(null));
@@ -301,7 +316,8 @@ public class QuestionService {
             try {
                 applyExamDefaults(copy, target);
                 validate(copy);
-                questionRepository.save(copy);
+                Question saved = questionRepository.save(copy);
+                if (saved.isCoding()) copyTestCases(src.getId(), saved.getId());
                 report.recordSaved();
             } catch (IllegalArgumentException e) {
                 report.recordError(line, e.getMessage(),
@@ -309,6 +325,37 @@ public class QuestionService {
             }
         }
         return report;
+    }
+
+    /**
+     * Duplicates a coding question's test cases onto the copy.
+     *
+     * A coding question without them is unmarkable, so a reuse that brought the
+     * statement and left the cases behind would produce a question that looks
+     * complete, passes review, and blocks publication with an error about a
+     * paper somebody thought they had finished.
+     *
+     * Copied rather than shared: editing the new exam's cases must not reach
+     * back into the paper they came from, which may have already been sat.
+     */
+    private void copyTestCases(Long fromQuestionId, Long toQuestionId) {
+        List<com.Exam.Exam_System.Entity.TestCase> originals =
+                testCaseRepository.findByQuestionIdOrderByDisplayOrderAscIdAsc(fromQuestionId);
+        if (originals.isEmpty()) return;
+
+        List<com.Exam.Exam_System.Entity.TestCase> copies = new ArrayList<>();
+        for (com.Exam.Exam_System.Entity.TestCase original : originals) {
+            com.Exam.Exam_System.Entity.TestCase copy = new com.Exam.Exam_System.Entity.TestCase();
+            copy.setQuestionId(toQuestionId);
+            copy.setInput(original.getInput());
+            copy.setExpectedOutput(original.getExpectedOutput());
+            copy.setSample(original.isSample());
+            copy.setWeight(original.getWeight());
+            copy.setLabel(original.getLabel());
+            copy.setDisplayOrder(original.getDisplayOrder());
+            copies.add(copy);
+        }
+        testCaseRepository.saveAll(copies);
     }
 
     /**

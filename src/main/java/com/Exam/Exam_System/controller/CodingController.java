@@ -40,6 +40,7 @@ public class CodingController {
 
     private final RunThrottle runThrottle;
     private final SectionClockService sectionClock;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     public CodingController(QuestionRepository questions,
                             TestCaseRepository testCases,
@@ -47,7 +48,8 @@ public class CodingController {
                             AccessGuard accessGuard,
                             CodeExecutionService execution,
                             RunThrottle runThrottle,
-                            SectionClockService sectionClock) {
+                            SectionClockService sectionClock,
+                            org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.questions = questions;
         this.testCases = testCases;
         this.answers = answers;
@@ -55,6 +57,7 @@ public class CodingController {
         this.execution = execution;
         this.runThrottle = runThrottle;
         this.sectionClock = sectionClock;
+        this.jdbc = jdbc;
     }
 
     // ── Staff: writing the problem ──────────────────────────────────────────
@@ -351,5 +354,54 @@ public class CodingController {
     private static Long asLong(Object o) {
         if (o == null) throw new IllegalArgumentException("Missing id.");
         return Long.valueOf(String.valueOf(o));
+    }
+
+    /**
+     * The programs candidates actually submitted, for one exam.
+     *
+     * A score on its own is not reviewable. "Why did I get four marks" has no
+     * answer without the code that earned them, an appeal cannot be judged, and
+     * a member of staff who suspects two candidates submitted the same solution
+     * has nothing to compare. The platform stored every submission from the
+     * start and gave nobody any way to read it.
+     *
+     * Staff only, scoped to an exam this admin owns.
+     */
+    @GetMapping("/admin/coding/exam/{examId}/submissions")
+    public List<Map<String, Object>> submissionsFor(@PathVariable Long examId,
+                                                    @RequestParam(required = false) Long questionId) {
+        accessGuard.requireOwnedExam(examId);
+
+        String sql = """
+                SELECT s.hall_ticket, s.name AS candidate,
+                       q.id AS question_id, q.question_text,
+                       a.language, a.source_code, a.tests_passed, a.tests_total,
+                       a.awarded_marks, a.judge_message, a.updated_at
+                  FROM answers a
+                  JOIN attempts  at ON at.id = a.attempt_id
+                  JOIN students  s  ON s.id  = at.student_id
+                  JOIN questions q  ON q.id  = a.question_id
+                 WHERE at.exam_id = ?
+                   AND q.type = 'CODING'
+                   AND a.source_code IS NOT NULL
+                   AND (? IS NULL OR q.id = ?)
+                 ORDER BY q.id, s.hall_ticket
+                """;
+
+        return jdbc.query(sql, (rs, i) -> {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("hallTicket", rs.getString("hall_ticket"));
+            row.put("candidate", rs.getString("candidate"));
+            row.put("questionId", rs.getLong("question_id"));
+            row.put("questionText", rs.getString("question_text"));
+            row.put("language", rs.getString("language"));
+            row.put("sourceCode", rs.getString("source_code"));
+            row.put("testsPassed", rs.getObject("tests_passed"));
+            row.put("testsTotal", rs.getObject("tests_total"));
+            row.put("awardedMarks", rs.getObject("awarded_marks"));
+            row.put("judgeMessage", rs.getString("judge_message"));
+            row.put("submittedAt", rs.getTimestamp("updated_at"));
+            return row;
+        }, examId, questionId, questionId);
     }
 }
