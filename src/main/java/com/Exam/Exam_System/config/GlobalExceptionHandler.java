@@ -119,9 +119,30 @@ public class GlobalExceptionHandler {
         return body(HttpStatus.PAYLOAD_TOO_LARGE, "FILE_TOO_LARGE", "That file is too large.");
     }
 
+    /**
+     * The catch-all, worded for whoever is actually reading it.
+     *
+     * "Contact the exam invigilator" is the right thing to tell a candidate and
+     * useless to staff, who ARE the invigilator — an administrator whose save
+     * failed was told to go and find themselves. Staff get the exception's own
+     * message and are pointed at the log, which is the difference between a
+     * fifteen-minute fix and an afternoon.
+     *
+     * The candidate's message stays deliberately vague. A stack trace class
+     * name in front of somebody sitting an exam helps nobody and worries them.
+     */
     @ExceptionHandler(Exception.class)
-    public ResponseEntity<Map<String, Object>> unexpected(Exception e) {
+    public ResponseEntity<Map<String, Object>> unexpected(Exception e, jakarta.servlet.http.HttpServletRequest request) {
         log.error("Unhandled exception", e);
+
+        String path = request == null ? "" : String.valueOf(request.getRequestURI());
+        if (path.contains("/admin/")) {
+            String detail = e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage();
+            return body(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR",
+                    "The server rejected that: " + detail
+                    + " (the full error is in the application log)");
+        }
+
         return body(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR",
                 "Something went wrong. Please contact the exam invigilator.");
     }

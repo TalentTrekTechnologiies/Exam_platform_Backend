@@ -25,13 +25,16 @@ public class QuestionService {
     private final QuestionRepository questionRepository;
     private final SectionRepository sectionRepository;
     private final ExamRepository examRepository;
+    private final com.Exam.Exam_System.repository.TestCaseRepository testCaseRepository;
 
     public QuestionService(QuestionRepository questionRepository,
                            SectionRepository sectionRepository,
-                           ExamRepository examRepository) {
+                           ExamRepository examRepository,
+                           com.Exam.Exam_System.repository.TestCaseRepository testCaseRepository) {
         this.questionRepository = questionRepository;
         this.sectionRepository = sectionRepository;
         this.examRepository = examRepository;
+        this.testCaseRepository = testCaseRepository;
     }
 
     /**
@@ -118,6 +121,11 @@ public class QuestionService {
         if (!questionRepository.existsById(id)) {
             throw new NoSuchElementException("Question not found");
         }
+        // A coding question's test cases are its own; nothing else refers to
+        // them, so leaving them behind would be rows accumulating forever with
+        // no way to reach them. Harmless on a multiple-choice question, which
+        // has none.
+        testCaseRepository.deleteByQuestionId(id);
         questionRepository.deleteById(id);
     }
 

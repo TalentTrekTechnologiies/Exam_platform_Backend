@@ -14,6 +14,7 @@ import com.Exam.Exam_System.service.judge.Language;
 import com.Exam.Exam_System.service.judge.RunThrottle;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -86,6 +87,21 @@ public class CodingController {
      * fixes them together. Editing them individually invites a half-updated
      * key, which is the one state that must never exist.
      */
+    /*
+     * Transactional for two reasons, and the first one bit immediately.
+     *
+     * A derived deleteBy query loads the rows and removes them one by one, and
+     * removing needs a transaction. Without this the delete threw the moment
+     * there was anything to delete -- so creating a question worked (nothing to
+     * remove yet) and every edit afterwards failed, leaving the OLD cases in
+     * place while the screen showed an error. An admin correcting a wrong
+     * expected output would have been told it failed, and been right.
+     *
+     * The second reason outlives the first: this replaces the answer key in two
+     * steps, and a failure between them would leave a question with no test
+     * cases at all. Delete and insert belong in the same transaction.
+     */
+    @Transactional
     @PutMapping("/admin/coding/{questionId}/tests")
     public Map<String, Object> replaceTests(@PathVariable Long questionId,
                                             @RequestBody List<Map<String, Object>> incoming) {
