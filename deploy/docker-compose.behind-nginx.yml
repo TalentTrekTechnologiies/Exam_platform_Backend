@@ -61,6 +61,23 @@ x-app: &app
       SEED_ADMIN_COLLEGE: ${SEED_ADMIN_COLLEGE}
       SEED_ADMIN_CODE: ${SEED_ADMIN_CODE}
       MAIL_ENABLED: ${MAIL_ENABLED:-false}
+
+      # ── The coding round ────────────────────────────────────────────────
+      # Off unless a judge is named. Setting these in .env alone does nothing:
+      # compose's .env substitutes ${VAR} inside THIS file, it does not pass
+      # variables into containers -- so anything the application reads has to
+      # be listed here or it never arrives.
+      JUDGE_PROVIDER: ${JUDGE_PROVIDER:-none}
+      # Not 127.0.0.1: that is this container, not the host. The docker bridge
+      # gateway is how the app reaches a judge published on the host's loopback.
+      JUDGE_URL: ${JUDGE_URL:-http://172.17.0.1:2358}
+      JUDGE_TOKEN: ${JUDGE_TOKEN:-}
+      JUDGE_RUN_MIN_INTERVAL: ${JUDGE_RUN_MIN_INTERVAL:-5}
+      JUDGE_RUN_MAX_PER_ATTEMPT: ${JUDGE_RUN_MAX_PER_ATTEMPT:-400}
+
+      # Time returned to a candidate after a disconnection.
+      RECONNECT_GRACE_SECONDS: ${RECONNECT_GRACE_SECONDS:-60}
+      RECONNECT_MAX_SECONDS: ${RECONNECT_MAX_SECONDS:-900}
       TZ: ${TZ:-Asia/Kolkata}
     volumes:
       # Question diagrams and college logos are written at runtime, so they
