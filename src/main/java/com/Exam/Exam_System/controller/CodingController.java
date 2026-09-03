@@ -410,4 +410,33 @@ public class CodingController {
             return row;
         }, examId, questionId, questionId);
     }
+
+    /**
+     * A candidate's own saved code, for every coding question on their paper.
+     *
+     * The paper endpoint returns the questions and /student/responses returns
+     * the option letters; neither carries a program. So a candidate who moved
+     * to the next question and came back found an empty editor and had to
+     * assume their work was gone -- during an exam, with a clock running.
+     *
+     * Their own attempt only, and it returns what they wrote, which they are
+     * plainly entitled to. No expected outputs and no hidden cases.
+     */
+    @GetMapping("/student/code/mine/{attemptId}")
+    public Map<String, Object> myCode(@PathVariable Long attemptId) {
+        accessGuard.requireOwnAttempt(attemptId);
+
+        Map<String, Object> byQuestion = new LinkedHashMap<>();
+        for (Answer a : answers.findByAttemptId(attemptId)) {
+            if (a.getSourceCode() == null) continue;
+            Map<String, Object> one = new LinkedHashMap<>();
+            one.put("sourceCode", a.getSourceCode());
+            one.put("language", a.getLanguage());
+            one.put("testsPassed", a.getTestsPassed());
+            one.put("testsTotal", a.getTestsTotal());
+            one.put("marks", a.getAwardedMarks());
+            byQuestion.put(String.valueOf(a.getQuestionId()), one);
+        }
+        return byQuestion;
+    }
 }
