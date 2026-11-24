@@ -293,18 +293,12 @@ public class AdminController {
 
                 // Scoped to THIS institution: another college's candidate with the
                 // same roll number must never be adopted into this roster.
-                var student = studentService.saveOrGet(currentUser.adminId(), hallTicket, name);
+                var student = findOrCreateStudent(hallTicket, name);
 
-                if (examStudentRepository.existsByStudentIdAndExamId(student.getId(), examId)) {
+                if (examStudentRepository.enrolIfAbsent(student.getId(), examId, slotId) == 0) {
                     report.recordError(lineNumber, "Already assigned to this exam.", line);
                     continue;
                 }
-
-                ExamStudent mapping = new ExamStudent();
-                mapping.setStudentId(student.getId());
-                mapping.setExamId(examId);
-                mapping.setSlotId(slotId);
-                examStudentRepository.save(mapping);
                 report.recordSaved();
             }
 
@@ -362,20 +356,32 @@ public class AdminController {
                 continue;
             }
 
-            var student = studentService.saveOrGet(currentUser.adminId(), hallTicket, name);
-            if (examStudentRepository.existsByStudentIdAndExamId(student.getId(), examId)) {
+            var student = findOrCreateStudent(hallTicket, name);
+            if (examStudentRepository.enrolIfAbsent(student.getId(), examId, slotId) == 0) {
                 report.recordError(line, "Already enrolled in this exam.", hallTicket);
                 continue;
             }
-
-            ExamStudent mapping = new ExamStudent();
-            mapping.setStudentId(student.getId());
-            mapping.setExamId(examId);
-            mapping.setSlotId(slotId);
-            examStudentRepository.save(mapping);
             report.recordSaved();
         }
         return report;
+    }
+
+    /**
+     * Finds or creates a candidate on this institution's roll, allowing for a
+     * second request doing the same thing at the same moment.
+     *
+     * On a slow line the same batch can arrive twice at once. Both requests find
+     * no student with the ticket and both insert; the unique key refuses the
+     * second, which used to fail that whole request with "That record already
+     * exists". By the time the refusal arrives the other request has written the
+     * student, so looking again finds them.
+     */
+    private com.Exam.Exam_System.Entity.Student findOrCreateStudent(String hallTicket, String name) {
+        try {
+            return studentService.saveOrGet(currentUser.adminId(), hallTicket, name);
+        } catch (org.springframework.dao.DataIntegrityViolationException race) {
+            return studentService.saveOrGet(currentUser.adminId(), hallTicket, name);
+        }
     }
 
     /** Null-safe read of a value from a loosely-typed request map. */
@@ -533,16 +539,10 @@ public class AdminController {
                 continue;
             }
 
-            Integer already = jdbc.queryForObject(
-                    "SELECT COUNT(*) FROM exam_student WHERE student_id = ? AND exam_id = ?",
-                    Integer.class, studentId, examId);
-            if (already != null && already > 0) {
+            if (examStudentRepository.enrolIfAbsent(studentId, examId, slotId) == 0) {
                 report.recordError(line, "Already assigned to this exam.", String.valueOf(studentId));
                 continue;
             }
-
-            jdbc.update("INSERT INTO exam_student (student_id, exam_id, slot_id) VALUES (?, ?, ?)",
-                    studentId, examId, slotId);
             report.recordSaved();
         }
         return report;

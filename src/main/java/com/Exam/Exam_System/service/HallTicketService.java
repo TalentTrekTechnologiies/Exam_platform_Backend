@@ -1,6 +1,5 @@
 package com.Exam.Exam_System.service;
 
-import com.Exam.Exam_System.Entity.ExamStudent;
 import com.Exam.Exam_System.Entity.Student;
 import com.Exam.Exam_System.repository.ExamStudentRepository;
 import com.Exam.Exam_System.repository.StudentRepository;
@@ -111,13 +110,8 @@ public class HallTicketService {
                 created = true;
             }
 
-            if (examId != null && slotId != null
-                    && !examStudentRepository.existsByStudentIdAndExamId(student.getId(), examId)) {
-                ExamStudent mapping = new ExamStudent();
-                mapping.setStudentId(student.getId());
-                mapping.setExamId(examId);
-                mapping.setSlotId(slotId);
-                examStudentRepository.save(mapping);
+            if (examId != null && slotId != null) {
+                examStudentRepository.enrolIfAbsent(student.getId(), examId, slotId);
             }
 
             issued.add(new IssuedTicket(student.getId(), student.getHallTicket(), student.getName(), created));

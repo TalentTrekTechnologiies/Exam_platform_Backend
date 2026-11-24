@@ -1,6 +1,8 @@
 package com.Exam.Exam_System.repository;
 
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Modifying;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import com.Exam.Exam_System.Entity.ExamStudent;
@@ -44,6 +46,23 @@ public interface ExamStudentRepository
     long countRosterForAdmin(@Param("adminId") Long adminId, @Param("examId") Long examId);
 
     boolean existsByStudentIdAndExamId(Long studentId, Long examId);
+
+    /**
+     * Enrols a candidate unless they are already in the exam, in one statement.
+     *
+     * Returns 1 when enrolled, 0 when they were already there. Checking first
+     * and then saving let two overlapping requests (a slow line, Add pressed
+     * again) both pass the check and both insert; the unique key on
+     * (student_id, exam_id) settles it inside the database instead. IGNORE is
+     * safe here because every value is validated before this is called.
+     */
+    @Modifying
+    @Transactional
+    @Query(value = "INSERT IGNORE INTO exam_student (student_id, exam_id, slot_id) VALUES (:studentId, :examId, :slotId)",
+           nativeQuery = true)
+    int enrolIfAbsent(@Param("studentId") Long studentId,
+                      @Param("examId") Long examId,
+                      @Param("slotId") Long slotId);
 
     ExamStudent findByStudentIdAndExamId(Long studentId, Long examId);
 
