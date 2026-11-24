@@ -33,7 +33,10 @@ public class FileStorageService {
             "video/mp4", "video/webm", "video/ogg", "video/quicktime");
 
     private static final long MAX_IMAGE_BYTES = 5L * 1024 * 1024;
-    private static final long MAX_VIDEO_BYTES = 100L * 1024 * 1024;
+    // Every candidate downloads this in the same few minutes before the start,
+    // so it is held well below what a lab's connection can share out, and
+    // under the 30 MB nginx accepts in front of the app on KSRM.
+    private static final long MAX_VIDEO_BYTES = 25L * 1024 * 1024;
 
     private final Path root = Paths.get("uploads").toAbsolutePath().normalize();
 

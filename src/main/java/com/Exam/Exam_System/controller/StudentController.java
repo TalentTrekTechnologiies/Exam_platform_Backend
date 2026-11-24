@@ -39,6 +39,13 @@ public class StudentController {
     private final ProctorFrameService proctorFrameService;
     private final SectionClockService sectionClock;
 
+    /**
+     * How long before the sitting opens a candidate may sign in. They spend it
+     * watching the college's introduction and reading the rules, so the paper
+     * itself opens on the clock instead of after a queue at the door.
+     */
+    private final long lobbyMinutes;
+
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(StudentController.class);
 
@@ -56,7 +63,9 @@ public class StudentController {
                              ProctoringService proctoringService,
                              SessionWatch sessionWatch,
                              ProctorFrameService proctorFrameService,
-                             SectionClockService sectionClock) {
+                             SectionClockService sectionClock,
+                             @org.springframework.beans.factory.annotation.Value("${exam.lobby-minutes:15}") long lobbyMinutes) {
+        this.lobbyMinutes = Math.max(0, lobbyMinutes);
         this.sessionWatch = sessionWatch;
         this.proctorFrameService = proctorFrameService;
         this.studentService = studentService;
@@ -144,14 +153,19 @@ public class StudentController {
 
             var slot = slotService.getSlotById(mapping.getSlotId());
 
-            if (!now.isBefore(slot.getStartTime()) && !now.isAfter(slot.getEndTime())) {
+            // The doors open before the paper does: from lobbyMinutes ahead of
+            // the start a candidate may come in, watch the introduction and read
+            // the rules. The paper itself is still held until the start — that
+            // is enforced at /start and on every attempt endpoint, not here.
+            LocalDateTime doorsOpen = slot.getStartTime().minusMinutes(lobbyMinutes);
+            if (!now.isBefore(doorsOpen) && !now.isAfter(slot.getEndTime())) {
                 if (chosenExamId == null || chosenExamId.equals(mapping.getExamId())) {
                     openNow.add(mapping);
                 }
                 continue;
             }
-            if (now.isBefore(slot.getStartTime()) && (nextStart == null || slot.getStartTime().isBefore(nextStart))) {
-                nextStart = slot.getStartTime();
+            if (now.isBefore(doorsOpen) && (nextStart == null || doorsOpen.isBefore(nextStart))) {
+                nextStart = doorsOpen;
             }
         }
 
@@ -173,6 +187,7 @@ public class StudentController {
                 choice.put("examId", m.getExamId());
                 choice.put("examTitle", e.getTitle());
                 choice.put("duration", e.getDuration());
+                choice.put("opensAt", slot == null ? null : slot.getStartTime());
                 choice.put("closesAt", slot == null ? null : slot.getEndTime());
                 choices.add(choice);
             }
@@ -186,7 +201,8 @@ public class StudentController {
 
         if (valid == null) {
             if (nextStart != null) {
-                return denied("Your exam has not started yet. It opens at " + nextStart + ".");
+                return denied("Entry to your exam has not opened yet. You can sign in from "
+                        + nextStart.format(WHEN) + ".");
             }
             // Says which of the two it is, so the right person fixes the right
             // thing: the invigilator releases the paper, or checks the sitting.
@@ -211,6 +227,10 @@ public class StudentController {
         body.put("slotId", valid.getSlotId());
         return ResponseEntity.ok(body);
     }
+
+    /** How a time reads to a candidate: "12:00 PM, 24 Nov", not "2026-11-24T12:00". */
+    private static final java.time.format.DateTimeFormatter WHEN =
+            java.time.format.DateTimeFormatter.ofPattern("h:mm a, d MMM", Locale.ENGLISH);
 
     private ResponseEntity<Map<String, Object>> denied(String message) {
         Map<String, Object> body = new LinkedHashMap<>();
@@ -239,6 +259,17 @@ public class StudentController {
         ExamStudent mapping = examStudentRepository.findByStudentIdAndExamId(studentId, examId);
         if (mapping == null) {
             throw new IllegalArgumentException("You are not registered for this exam.");
+        }
+
+        // Signing in early only admits a candidate to the briefing. The paper
+        // opens at the sitting's start for everybody, whatever their own clock
+        // or a hand-crafted request says.
+        if (mapping.getSlotId() != null) {
+            var slot = slotService.getSlotById(mapping.getSlotId());
+            if (slot.getStartTime() != null && LocalDateTime.now().isBefore(slot.getStartTime())) {
+                throw new IllegalStateException(
+                        "The exam opens at " + slot.getStartTime().format(WHEN) + ". Please wait.");
+            }
         }
 
         Attempt attempt = attemptService.startOrResume(studentId, examId, mapping.getSlotId());
@@ -500,10 +531,30 @@ public class StudentController {
         data.put("title", exam.getTitle());
         data.put("collegeName", exam.getCollegeName());
         data.put("collegeLogo", exam.getCollegeLogo());
-        data.put("introVideo", exam.getIntroVideo());
+        // The exam's own video if it has one, otherwise the college's.
+        String introVideo = exam.getIntroVideo();
+        if ((introVideo == null || introVideo.isBlank()) && exam.getAdminId() != null) {
+            introVideo = adminRepository.findById(exam.getAdminId())
+                    .map(a -> a.getIntroVideo()).orElse(null);
+        }
+        data.put("introVideo", introVideo);
         data.put("duration", exam.getDuration());
         data.put("enableCamera", exam.isEnableCamera());
         data.put("enableMic", exam.isEnableMic());
+
+        // When the paper opens for this candidate, with the server's own clock
+        // beside it. The lobby counts down on the difference between the two,
+        // so a candidate's wrong system clock cannot open the paper early or
+        // keep it shut.
+        data.put("serverTime", LocalDateTime.now());
+        data.put("opensAt", null);
+        if (!currentUser.get().isAdmin()) {
+            ExamStudent mapping = examStudentRepository
+                    .findByStudentIdAndExamId(currentUser.studentId(), examId);
+            if (mapping != null && mapping.getSlotId() != null) {
+                data.put("opensAt", slotService.getSlotById(mapping.getSlotId()).getStartTime());
+            }
+        }
         return data;
     }
 

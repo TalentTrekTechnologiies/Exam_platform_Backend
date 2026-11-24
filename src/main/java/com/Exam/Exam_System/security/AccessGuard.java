@@ -114,6 +114,14 @@ public class AccessGuard {
                 throw new AccessDeniedException("That attempt belongs to another candidate.");
             }
         }
+
+        // Attempts are built the night before, and candidates may now sign in
+        // ahead of the sitting to read the rules. Ids are sequential, so without
+        // this a candidate in the lobby could walk ids until one is theirs and
+        // read the frozen paper before it opens. No deadline means not started.
+        if (meta.endTime() == null) {
+            throw new AccessDeniedException("This exam has not opened yet.");
+        }
     }
 
     /** The full attempt record, for the rare paths that need more than ownership. */

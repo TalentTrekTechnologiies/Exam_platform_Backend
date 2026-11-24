@@ -179,6 +179,40 @@ public class AdminController {
         return toAuthResponse(adminRepository.save(admin));
     }
 
+    /** The institution's introduction video, if one has been uploaded. */
+    @GetMapping("/profile/intro-video")
+    public Map<String, Object> introVideo() {
+        Admin admin = adminRepository.findById(currentUser.adminId())
+                .orElseThrow(() -> new NoSuchElementException("Account not found"));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("introVideo", admin.getIntroVideo());
+        return body;
+    }
+
+    /**
+     * Sets the video every candidate of this institution watches on entering
+     * the lobby, before any of its exams opens. Once, at the account level, so
+     * the same advertisement is not uploaded again for every paper.
+     */
+    @PutMapping("/profile/intro-video")
+    public Map<String, Object> uploadIntroVideo(@RequestParam("video") MultipartFile video) {
+        Admin admin = adminRepository.findById(currentUser.adminId())
+                .orElseThrow(() -> new NoSuchElementException("Account not found"));
+        admin.setIntroVideo(fileStorage.storeVideo(video));
+        adminRepository.save(admin);
+        return introVideo();
+    }
+
+    /** Stops playing the introduction. Exams then go straight to the rules. */
+    @DeleteMapping("/profile/intro-video")
+    public Map<String, Object> removeIntroVideo() {
+        Admin admin = adminRepository.findById(currentUser.adminId())
+                .orElseThrow(() -> new NoSuchElementException("Account not found"));
+        admin.setIntroVideo(null);
+        adminRepository.save(admin);
+        return introVideo();
+    }
+
     /**
      * Builds this institution's URL slug from its name, e.g.
      * "KSRM College of Engineering" -> "ksrm-college-of-engineering".

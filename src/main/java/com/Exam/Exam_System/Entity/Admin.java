@@ -49,6 +49,13 @@ public class Admin {
     private String collegeAddress;
     private String collegeLogo;
 
+    /**
+     * The college's own introduction, played to every candidate as they enter
+     * the lobby before any of its exams. Set once for the institution, like the
+     * logo; an exam with its own introVideo overrides it.
+     */
+    private String introVideo;
+
     public Long getId() { return id; }
     public void setId(Long id) { this.id = id; }
 
@@ -70,4 +77,7 @@ public class Admin {
 
     public String getCollegeLogo() { return collegeLogo; }
     public void setCollegeLogo(String collegeLogo) { this.collegeLogo = collegeLogo; }
+
+    public String getIntroVideo() { return introVideo; }
+    public void setIntroVideo(String introVideo) { this.introVideo = introVideo; }
 }
