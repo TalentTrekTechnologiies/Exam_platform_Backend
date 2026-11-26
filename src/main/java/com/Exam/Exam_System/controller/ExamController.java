@@ -320,6 +320,8 @@ public class ExamController {
         jdbc.update("DELETE FROM exam_slots WHERE exam_id = ?", examId);
 
         examRepository.deleteById(examId);
+        log.warn("Exam {} and its sittings deleted by admin {} ({} result(s) removed with it).",
+                examId, currentUser.adminId(), sat == null ? 0 : sat);
         try {
             proctorFrames.discard(attemptIds);
         } catch (RuntimeException e) {

@@ -16,11 +16,14 @@ public class SlotController {
     private final SlotRepository slotRepository;
     private final AccessGuard accessGuard;
     private final com.Exam.Exam_System.repository.ExamStudentRepository examStudentRepository;
+    private final com.Exam.Exam_System.security.CurrentUser currentUser;
 
     public SlotController(SlotService slotService,
                           SlotRepository slotRepository,
                           AccessGuard accessGuard,
-                          com.Exam.Exam_System.repository.ExamStudentRepository examStudentRepository) {
+                          com.Exam.Exam_System.repository.ExamStudentRepository examStudentRepository,
+                          com.Exam.Exam_System.security.CurrentUser currentUser) {
+        this.currentUser = currentUser;
         this.examStudentRepository = examStudentRepository;
         this.slotService = slotService;
         this.slotRepository = slotRepository;
@@ -87,7 +90,7 @@ public class SlotController {
 
     @DeleteMapping("/{id}")
     public void deleteSlot(@PathVariable Long id) {
-        accessGuard.requireOwnedSlot(id);
+        var doomed = accessGuard.requireOwnedSlot(id);
 
         // Deleting a sitting people are enrolled in left their enrolment naming
         // a slot that no longer existed, and every one of them was turned away
@@ -99,5 +102,10 @@ public class SlotController {
                     + "with Edit, or move them to another sitting first (Add Candidates, roster).");
         }
         slotRepository.deleteById(id);
+        // Recorded, because a sitting that vanished left nobody able to say
+        // when or by whom: the web server's own access log was the only trace.
+        org.slf4j.LoggerFactory.getLogger(SlotController.class).warn(
+                "Sitting {} of exam {} ({} to {}) deleted by admin {}.",
+                id, doomed.getExamId(), doomed.getStartTime(), doomed.getEndTime(), currentUser.adminId());
     }
 }
