@@ -45,6 +45,15 @@ public class LoginRateLimitFilter extends OncePerRequestFilter {
 
     private static final int LOGIN_MAX_ATTEMPTS = 10;
     private static final int VALIDATE_MAX_ATTEMPTS = 10;
+
+    /**
+     * Hall-ticket lookups per address. Keyed on the address rather than the
+     * ticket, because the thing to stop here is one machine walking through
+     * hall tickets reading names. Sized for a whole lab behind one NAT
+     * address, each candidate looking up once or twice; the open-entry-window
+     * rule in the lookup itself is what keeps a name private the rest of the time.
+     */
+    private static final int LOOKUP_MAX_PER_ADDRESS = 1500;
     private static final long WINDOW_MILLIS = 5 * 60 * 1000;
 
     /** Bounded the same way AttemptCache is — many distinct keys must not leak memory forever. */
@@ -63,8 +72,9 @@ public class LoginRateLimitFilter extends OncePerRequestFilter {
 
         boolean isLogin = "POST".equals(request.getMethod()) && "/admin/login".equals(request.getRequestURI());
         boolean isValidate = "POST".equals(request.getMethod()) && "/student/validate".equals(request.getRequestURI());
+        boolean isLookup = "POST".equals(request.getMethod()) && "/student/lookup".equals(request.getRequestURI());
 
-        if (!isLogin && !isValidate) {
+        if (!isLogin && !isValidate && !isLookup) {
             chain.doFilter(request, response);
             return;
         }
@@ -75,8 +85,10 @@ public class LoginRateLimitFilter extends OncePerRequestFilter {
 
         String key = isLogin
                 ? "login|" + clientIp(cached)
-                : "validate|" + hallTicketFrom(cached).orElseGet(() -> clientIp(cached));
-        int limit = isLogin ? LOGIN_MAX_ATTEMPTS : VALIDATE_MAX_ATTEMPTS;
+                : isLookup
+                    ? "lookup|" + clientIp(cached)
+                    : "validate|" + hallTicketFrom(cached).orElseGet(() -> clientIp(cached));
+        int limit = isLogin ? LOGIN_MAX_ATTEMPTS : isLookup ? LOOKUP_MAX_PER_ADDRESS : VALIDATE_MAX_ATTEMPTS;
 
         long now = System.currentTimeMillis();
         if (attempts.size() > MAX_TRACKED_KEYS) {

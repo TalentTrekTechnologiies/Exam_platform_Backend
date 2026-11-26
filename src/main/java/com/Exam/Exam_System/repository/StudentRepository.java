@@ -38,4 +38,7 @@ public interface StudentRepository extends JpaRepository<Student, Long> {
      * ambiguous match across institutions is detected and refused, never guessed.
      */
     List<Student> findByHallTicketIgnoreCaseAndNameIgnoreCase(String hallTicket, String name);
+
+    /** Every candidate with this hall ticket on the platform, for the same single-college case. */
+    List<Student> findByHallTicketIgnoreCase(String hallTicket);
 }

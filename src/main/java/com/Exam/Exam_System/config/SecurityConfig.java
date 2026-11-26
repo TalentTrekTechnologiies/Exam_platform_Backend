@@ -44,7 +44,7 @@ public class SecurityConfig {
                 // Public: the two front doors, plus uploaded branding assets that
                 // the login and instructions screens render before any token exists.
                 .requestMatchers("/admin/login", "/admin/register").permitAll()
-                .requestMatchers("/student/validate").permitAll()
+                .requestMatchers("/student/validate", "/student/lookup").permitAll()
                 // Branding for a college's own sign-in page, shown before anyone
                 // has signed in. Returns name and logo only.
                 .requestMatchers(HttpMethod.GET, "/public/institution/**").permitAll()

@@ -29,6 +29,7 @@ public class StudentController {
     private final AnswerService answerService;
     private final PaperService paperService;
     private final ExamStudentRepository examStudentRepository;
+    private final com.Exam.Exam_System.repository.StudentRepository studentRepository;
     private final ExamRepository examRepository;
     private final com.Exam.Exam_System.repository.AdminRepository adminRepository;
     private final JwtService jwtService;
@@ -55,6 +56,7 @@ public class StudentController {
                              AnswerService answerService,
                              PaperService paperService,
                              ExamStudentRepository examStudentRepository,
+                             com.Exam.Exam_System.repository.StudentRepository studentRepository,
                              ExamRepository examRepository,
                              com.Exam.Exam_System.repository.AdminRepository adminRepository,
                              JwtService jwtService,
@@ -74,6 +76,7 @@ public class StudentController {
         this.answerService = answerService;
         this.paperService = paperService;
         this.examStudentRepository = examStudentRepository;
+        this.studentRepository = studentRepository;
         this.examRepository = examRepository;
         this.adminRepository = adminRepository;
         this.jwtService = jwtService;
@@ -244,6 +247,69 @@ public class StudentController {
     /** How a time reads to a candidate: "12:00 PM, 24 Nov", not "2026-11-24T12:00". */
     private static final java.time.format.DateTimeFormatter WHEN =
             java.time.format.DateTimeFormatter.ofPattern("h:mm a, d MMM", Locale.ENGLISH);
+
+    /**
+     * The name that goes with a hall ticket, so the candidate confirms who they
+     * are instead of typing their name.
+     *
+     * Typed names were the commonest reason a real candidate could not get in:
+     * an extra space, initials in a different order, a spelling that differs
+     * from the college's records. Signing in is now by hall ticket alone; this
+     * shows the name to confirm, and the sign-in that follows sends it back.
+     *
+     * A name is shown only when that candidate could sign in right now. The
+     * lookup runs the whole of /validate -- the exam is released, the doors are
+     * open, the paper is not already submitted -- and passes on its refusal
+     * otherwise, so outside a candidate's own entry window this says no more
+     * than signing in would. No token is issued here.
+     */
+    @PostMapping("/lookup")
+    public ResponseEntity<?> lookup(@RequestBody Map<String, String> request) {
+        String hallTicket = request.getOrDefault("hallTicket", "").trim();
+        String institutionCode = request.getOrDefault("institutionCode", "").trim();
+        if (hallTicket.isBlank()) {
+            return denied("Enter your hall ticket number.");
+        }
+
+        List<com.Exam.Exam_System.Entity.Student> found;
+        if (!institutionCode.isBlank()) {
+            var institution = adminRepository.findByCodeIgnoreCase(institutionCode);
+            if (institution.isEmpty()) {
+                return denied("That exam link is not valid. Check with your invigilator.");
+            }
+            found = studentRepository.findByAdminIdAndHallTicketIgnoreCase(institution.get().getId(), hallTicket)
+                    .stream().toList();
+        } else {
+            found = studentRepository.findByHallTicketIgnoreCase(hallTicket);
+        }
+        found = found.stream().filter(s -> !s.isDeleted()).toList();
+
+        if (found.isEmpty()) {
+            return denied("We could not find that hall ticket number. Check it, or ask your invigilator.");
+        }
+        if (found.size() > 1) {
+            return denied("Several institutions have a candidate with this hall ticket. "
+                    + "Please use your college's own exam link.");
+        }
+        var student = found.get(0);
+
+        // Every gate signing in has, decided by signing in itself.
+        Map<String, String> asSignIn = new HashMap<>(request);
+        asSignIn.put("name", student.getName());
+        ResponseEntity<?> outcome = validate(asSignIn);
+        Object status = outcome.getBody() instanceof Map<?, ?> body ? body.get("status") : null;
+        if (!"Allowed".equals(status) && !"Choose".equals(status)) {
+            return outcome;
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", "Found");
+        body.put("hallTicket", student.getHallTicket());
+        body.put("name", student.getName());
+        body.put("branch", student.getBranch());
+        body.put("year", student.getYear());
+        return ResponseEntity.ok(body);
+    }
 
     private ResponseEntity<Map<String, Object>> denied(String message) {
         Map<String, Object> body = new LinkedHashMap<>();
