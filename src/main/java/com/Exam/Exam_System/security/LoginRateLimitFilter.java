@@ -49,11 +49,17 @@ public class LoginRateLimitFilter extends OncePerRequestFilter {
     /**
      * Hall-ticket lookups per address. Keyed on the address rather than the
      * ticket, because the thing to stop here is one machine walking through
-     * hall tickets reading names. Sized for a whole lab behind one NAT
-     * address, each candidate looking up once or twice; the open-entry-window
-     * rule in the lookup itself is what keeps a name private the rest of the time.
+     * hall tickets reading names.
+     *
+     * A whole college often reaches the server through ONE address, and the
+     * sign-in screen looks a name up as the candidate types (a pause, Enter,
+     * a corrected digit), so 600 candidates arriving in the same few minutes
+     * make two or three thousand lookups from one address. The first ceiling,
+     * 1,500, would have turned the later arrivals away on exam morning. This
+     * one leaves room for several thousand candidates behind one gateway; the
+     * open-entry-window rule in the lookup is what keeps names private.
      */
-    private static final int LOOKUP_MAX_PER_ADDRESS = 1500;
+    private static final int LOOKUP_MAX_PER_ADDRESS = 20000;
     private static final long WINDOW_MILLIS = 5 * 60 * 1000;
 
     /** Bounded the same way AttemptCache is — many distinct keys must not leak memory forever. */

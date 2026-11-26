@@ -311,17 +311,25 @@ public class PublicationService {
         examRepository.save(exam);
         log.info("Exam {} published.", exam.getId());
 
-        // Every candidate's paper is built now, as part of publishing, rather
-        // than left as a separate "Prepare Papers" step that staff were told
-        // to run after importing the questions -- and that, skipped, left the
-        // server building hundreds of papers in the second the exam opened.
-        // Never the reason a publish fails: a paper not built here is built
-        // when that candidate presses Start.
-        try {
-            attemptService.prepareAttempts(exam.getId());
-        } catch (RuntimeException e) {
-            log.warn("Exam {} published, but preparing papers failed: {}", exam.getId(), e.toString());
-        }
+        // Every candidate's paper is built as part of publishing, rather than
+        // left as a separate "Prepare Papers" step that staff were told to run
+        // after importing the questions -- and that, skipped, left the server
+        // building hundreds of papers in the second the exam opened.
+        //
+        // In the background: 600 candidates on a 300-question paper is 180,000
+        // rows and about a minute, longer than the admin screen or nginx will
+        // wait for an answer. Publishing returns at once; "Papers ready" on the
+        // Publish page fills in as it goes. Never the reason a publish fails: a
+        // paper not built here is built when that candidate presses Start.
+        Long examId = exam.getId();
+        java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                var report = attemptService.prepareAttempts(examId);
+                log.info("Exam {} published; papers prepared: {}", examId, report);
+            } catch (RuntimeException e) {
+                log.warn("Exam {} published, but preparing papers failed: {}", examId, e.toString());
+            }
+        });
 
         return status(exam);
     }

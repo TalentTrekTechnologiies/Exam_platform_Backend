@@ -78,7 +78,7 @@ x-app: &app
       JUDGE_RUN_MAX_PER_ATTEMPT: ${JUDGE_RUN_MAX_PER_ATTEMPT:-400}
 
       # Time returned to a candidate after a disconnection.
-      RECONNECT_GRACE_SECONDS: ${RECONNECT_GRACE_SECONDS:-60}
+      RECONNECT_GRACE_SECONDS: ${RECONNECT_GRACE_SECONDS:-40}
       RECONNECT_MAX_SECONDS: ${RECONNECT_MAX_SECONDS:-900}
       TZ: ${TZ:-Asia/Kolkata}
     volumes:
