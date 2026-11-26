@@ -336,6 +336,15 @@ public class StudentController {
         return ResponseEntity.ok(body);
     }
 
+    /** A refusal to start, with a code the lobby can tell apart from "not open yet". */
+    private ResponseEntity<Map<String, Object>> refusedStart(String code, String message) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("status", 409);
+        body.put("code", code);
+        body.put("message", message);
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(body);
+    }
+
     private ResponseEntity<Map<String, Object>> denied(String message) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("status", "Denied");
@@ -374,6 +383,25 @@ public class StudentController {
                 throw new IllegalStateException(
                         "The exam opens at " + slot.getStartTime().format(WHEN) + ". Please wait.");
             }
+        }
+
+        // One sitting each. A paper handed in is never reopened, whatever an
+        // old token on the machine says.
+        Attempt existing = attemptService.getAttempt(studentId, examId);
+        if (existing != null && "SUBMITTED".equals(existing.getStatus())) {
+            return refusedStart("ALREADY_SUBMITTED", "You have already submitted this exam.");
+        }
+
+        // Late entry ends with the buffer. Sign-in checks it, but a candidate
+        // who signed in during the buffer could wait on the instructions page
+        // and press Begin long after, starting a full-length paper when the
+        // doors had shut. Starting is checked here too; resuming a paper
+        // already begun is not, or a dropped connection would lose it.
+        boolean notYetStarted = existing == null || "PENDING".equals(existing.getStatus());
+        if (notYetStarted && slot != null && slot.getEndTime() != null
+                && LocalDateTime.now().isAfter(slot.getEndTime())) {
+            return refusedStart("ENTRY_CLOSED", "Entry to this exam closed at "
+                    + slot.getEndTime().format(WHEN) + ". Ask your invigilator.");
         }
 
         Attempt attempt = attemptService.startOrResume(studentId, examId, mapping.getSlotId());
