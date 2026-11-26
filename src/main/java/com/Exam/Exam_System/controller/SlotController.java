@@ -37,7 +37,17 @@ public class SlotController {
         if (!slot.getEndTime().isAfter(slot.getStartTime())) {
             throw new IllegalArgumentException("The slot must end after it starts.");
         }
-        return slotService.createSlot(slot);
+        Slot saved = slotService.createSlot(slot);
+
+        // A sitting deleted and then created again is the commonest way to
+        // "move" one. Whoever was left in the deleted one belongs in this.
+        int adopted = examStudentRepository.adoptStranded(saved.getExamId(), saved.getId());
+        if (adopted > 0) {
+            org.slf4j.LoggerFactory.getLogger(SlotController.class).info(
+                    "New sitting {} for exam {} took in {} candidate(s) whose sitting had been deleted.",
+                    saved.getId(), saved.getExamId(), adopted);
+        }
+        return saved;
     }
 
     @GetMapping("/{examId}")

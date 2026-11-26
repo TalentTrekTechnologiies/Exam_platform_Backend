@@ -170,7 +170,18 @@ public class StudentController {
             }
 
             var slot = slotService.findSlot(mapping.getSlotId()).orElse(null);
-            if (slot == null) { sittingMissing = true; continue; }
+            if (slot == null) {
+                // Their sitting was deleted. Put them in the one that is open
+                // now, or the next, and remember it, so the lobby and Start
+                // see a real sitting too. Only an exam with no sitting left to
+                // come leaves them out.
+                slot = slotService.sittingByClock(mapping.getExamId(), now, lobbyMinutes);
+                if (slot == null) { sittingMissing = true; continue; }
+                mapping.setSlotId(slot.getId());
+                examStudentRepository.save(mapping);
+                log.info("Candidate {} had no sitting for exam {}; placed in sitting {}.",
+                        student.getId(), mapping.getExamId(), slot.getId());
+            }
 
             // The doors open before the paper does: from lobbyMinutes ahead of
             // the start a candidate may come in, watch the introduction and read
@@ -226,7 +237,7 @@ public class StudentController {
             // Says which of the two it is, so the right person fixes the right
             // thing: the invigilator releases the paper, or checks the sitting.
             if (sittingMissing) {
-                return denied("Your exam sitting was removed. Ask your invigilator to put you in a sitting.");
+                return denied("There is no sitting of your exam left to sign in to. Ask your invigilator.");
             }
             return denied(awaitingRelease
                     ? "Your exam has not been released yet. Ask your invigilator to publish it."

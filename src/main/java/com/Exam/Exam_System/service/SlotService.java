@@ -55,6 +55,32 @@ public class SlotService {
         return slotId == null ? Optional.empty() : slotRepository.findById(slotId);
     }
 
+    /**
+     * The sitting a candidate belongs in when the one they were enrolled in
+     * was deleted: the one of their exam that is open for entry right now,
+     * else the next one to open. Null when the exam has none still to come.
+     *
+     * Someone who arrives during a sitting's entry window is there for that
+     * sitting; that is the only evidence left once their own slot is gone,
+     * and it is the same evidence an invigilator at the door would use.
+     */
+    public Slot sittingByClock(Long examId, LocalDateTime now, long lobbyMinutes) {
+        Slot openNow = null;
+        Slot next = null;
+        for (Slot s : slotRepository.findAllByExamId(examId)) {
+            if (s.getStartTime() == null || s.getEndTime() == null) continue;
+            boolean doorsOpen = !now.isBefore(s.getStartTime().minusMinutes(lobbyMinutes));
+            boolean stillEntering = !now.isAfter(s.getEndTime());
+            if (doorsOpen && stillEntering) {
+                // Overlapping sittings: the one that began most recently.
+                if (openNow == null || s.getStartTime().isAfter(openNow.getStartTime())) openNow = s;
+            } else if (!doorsOpen && (next == null || s.getStartTime().isBefore(next.getStartTime()))) {
+                next = s;
+            }
+        }
+        return openNow != null ? openNow : next;
+    }
+
     public Slot getSlotById(Long slotId) {
         return slotRepository.findById(slotId)
                 .orElseThrow(() -> new RuntimeException("Slot not found"));

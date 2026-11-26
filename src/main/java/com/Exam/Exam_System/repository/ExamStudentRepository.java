@@ -50,6 +50,19 @@ public interface ExamStudentRepository
     /** How many candidates are enrolled in one sitting. */
     long countBySlotId(Long slotId);
 
+    /** Moves an exam's candidates whose sitting no longer exists into this one. */
+    @Modifying
+    @Transactional
+    @Query(value = """
+            UPDATE exam_student es
+              LEFT JOIN exam_slots sl ON sl.id = es.slot_id
+               SET es.slot_id = :slotId
+             WHERE es.exam_id = :examId
+               AND es.slot_id IS NOT NULL
+               AND sl.id IS NULL
+            """, nativeQuery = true)
+    int adoptStranded(@Param("examId") Long examId, @Param("slotId") Long slotId);
+
     /**
      * Enrols a candidate unless they are already in the exam, in one statement.
      *
