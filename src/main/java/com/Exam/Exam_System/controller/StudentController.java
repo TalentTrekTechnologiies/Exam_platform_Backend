@@ -145,6 +145,8 @@ public class StudentController {
         boolean awaitingRelease = false;
         // Enrolled against a sitting that no longer exists.
         boolean sittingMissing = false;
+        // A paper this candidate has already handed in.
+        boolean submittedAny = false;
 
         for (ExamStudent mapping : mappings) {
             if (mapping.getSlotId() == null) continue;
@@ -162,6 +164,9 @@ public class StudentController {
             // started at 5:10, lost power at 5:58 and is back at 6:03 must not
             // be told their window has closed with an hour's paper half written.
             Attempt live = attemptService.getAttempt(student.getId(), mapping.getExamId());
+            // Handed in: never offered again. Left in, a candidate enrolled in
+            // two papers was shown the one they had finished as a choice.
+            if (live != null && "SUBMITTED".equals(live.getStatus())) { submittedAny = true; continue; }
             if (live != null && AttemptService.STARTED.equals(live.getStatus())) {
                 if (chosenExamId == null || chosenExamId.equals(mapping.getExamId())) {
                     openNow.add(mapping);
@@ -236,6 +241,9 @@ public class StudentController {
             }
             // Says which of the two it is, so the right person fixes the right
             // thing: the invigilator releases the paper, or checks the sitting.
+            if (submittedAny) {
+                return denied("You have already submitted this exam.");
+            }
             if (sittingMissing) {
                 return denied("There is no sitting of your exam left to sign in to. Ask your invigilator.");
             }
