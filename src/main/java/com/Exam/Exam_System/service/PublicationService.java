@@ -50,6 +50,7 @@ public class PublicationService {
     private final AdminRepository adminRepository;
     private final TestCaseRepository testCaseRepository;
     private final com.Exam.Exam_System.service.judge.Judge judge;
+    private final AttemptService attemptService;
 
     public PublicationService(ExamRepository examRepository,
                               QuestionRepository questionRepository,
@@ -59,7 +60,9 @@ public class PublicationService {
                               AttemptRepository attemptRepository,
                               AdminRepository adminRepository,
                               TestCaseRepository testCaseRepository,
-                              com.Exam.Exam_System.service.judge.Judge judge) {
+                              com.Exam.Exam_System.service.judge.Judge judge,
+                              @org.springframework.context.annotation.Lazy AttemptService attemptService) {
+        this.attemptService = attemptService;
         this.examRepository = examRepository;
         this.questionRepository = questionRepository;
         this.sectionRepository = sectionRepository;
@@ -216,10 +219,12 @@ public class PublicationService {
             }
         });
 
+        // Before publishing there is nothing to say: publishing prepares them.
+        // After, only candidates enrolled since then can be without one.
         int prepared = (int) attemptRepository.countByExamId(exam.getId());
-        if (candidates > 0 && prepared < candidates) {
-            warnings.add((candidates - prepared) + " candidate(s) have no paper prepared yet. "
-                    + "Run Prepare Papers before exam day for a faster, calmer start.");
+        if (exam.isPublished() && candidates > 0 && prepared < candidates) {
+            warnings.add((candidates - prepared) + " candidate(s) have no paper ready yet. They will still "
+                    + "get one when they press Start; Prepare papers now builds them in advance for a faster start.");
         }
 
         PublicationStatus status = new PublicationStatus();
@@ -306,6 +311,18 @@ public class PublicationService {
         examRepository.save(exam);
         log.info("Exam {} published.", exam.getId());
 
+        // Every candidate's paper is built now, as part of publishing, rather
+        // than left as a separate "Prepare Papers" step that staff were told
+        // to run after importing the questions -- and that, skipped, left the
+        // server building hundreds of papers in the second the exam opened.
+        // Never the reason a publish fails: a paper not built here is built
+        // when that candidate presses Start.
+        try {
+            attemptService.prepareAttempts(exam.getId());
+        } catch (RuntimeException e) {
+            log.warn("Exam {} published, but preparing papers failed: {}", exam.getId(), e.toString());
+        }
+
         return status(exam);
     }
 
@@ -322,8 +339,7 @@ public class PublicationService {
      */
     @Transactional
     public PublicationStatus unpublish(Exam exam) {
-        long writing = attemptRepository.countByExamIdAndStatusAndEndTimeAfter(
-                exam.getId(), "STARTED", java.time.LocalDateTime.now());
+        long writing = attemptRepository.countWritingNow(exam.getId());
         if (writing > 0) {
             throw new IllegalStateException(
                     "CANNOT_UNPUBLISH_IN_PROGRESS: " + writing + " candidate(s) are writing this exam right now. "

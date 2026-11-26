@@ -299,8 +299,12 @@ public class ExamController {
         }
 
         // Even with results included, never from under somebody mid-paper.
+        // Writing means heard from in the last two minutes, as unpublish
+        // counts it: a closed browser with time left on its deadline is not
+        // somebody in the middle of their paper.
         Integer writing = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM attempts WHERE exam_id = ? AND status = 'STARTED' AND end_time > NOW()",
+                "SELECT COUNT(*) FROM attempts WHERE exam_id = ? AND status = 'STARTED' AND end_time > NOW()"
+                        + " AND COALESCE(last_seen_at, start_time) > NOW() - INTERVAL 2 MINUTE",
                 Integer.class, examId);
         if (writing != null && writing > 0) {
             throw new IllegalStateException(writing + " candidate(s) are writing this exam right now. "
