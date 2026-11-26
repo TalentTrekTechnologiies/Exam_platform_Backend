@@ -138,20 +138,12 @@ public class StudentController {
         // When the candidate has already chosen, only that exam is considered.
         String askedFor = request.getOrDefault("examId", "");
         Long chosenExamId = askedFor.isBlank() ? null : Long.valueOf(askedFor.trim());
-        // Whether anything stopped them other than the clock. Without this, an
-        // exam the staff had not published yet turned candidates away saying
-        // their window had closed — sending an invigilator to check the
-        // timetable when the paper simply had not been released.
-        boolean awaitingRelease = false;
-        // Enrolled against a sitting that no longer exists.
-        boolean sittingMissing = false;
-        // A paper this candidate has already handed in.
-        boolean submittedAny = false;
-        // Named in the refusal, so a candidate with an old paper finished and
-        // today's not yet open is not told "already submitted" about the wrong
-        // exam -- which is exactly what they were told.
-        String submittedTitle = null, releaseTitle = null, nextTitle = null, closedTitle = null;
-        LocalDateTime closedAt = null;
+        // Why each exam this candidate is in cannot be entered now, with the
+        // moment that reason belongs to. When none is open, the refusal is the
+        // one nearest to now: a candidate who has just handed in today's paper
+        // is told that, not that entry to some other exam closed hours ago --
+        // and an exam opening in ten minutes outranks one submitted yesterday.
+        List<Refusal> refusals = new ArrayList<>();
 
         for (ExamStudent mapping : mappings) {
             if (mapping.getSlotId() == null) continue;
@@ -162,8 +154,10 @@ public class StudentController {
             var examForMapping = examRepository.findById(mapping.getExamId()).orElse(null);
             if (examForMapping == null) continue;
             if (!examForMapping.isPublished()) {
-                awaitingRelease = true;
-                releaseTitle = examForMapping.getTitle();
+                // Not the clock: the paper simply has not been released.
+                var sitting = slotService.findSlot(mapping.getSlotId()).orElse(null);
+                refusals.add(new Refusal(sitting == null ? now : sitting.getStartTime(),
+                        examForMapping.getTitle() + " has not been released yet. Ask your invigilator to publish it."));
                 continue;
             }
 
@@ -176,8 +170,8 @@ public class StudentController {
             // Handed in: never offered again. Left in, a candidate enrolled in
             // two papers was shown the one they had finished as a choice.
             if (live != null && "SUBMITTED".equals(live.getStatus())) {
-                submittedAny = true;
-                submittedTitle = examForMapping.getTitle();
+                refusals.add(new Refusal(live.getSubmittedAt() != null ? live.getSubmittedAt() : live.getEndTime(),
+                        submittedMessage(examForMapping.getTitle())));
                 continue;
             }
             if (live != null && AttemptService.STARTED.equals(live.getStatus())) {
@@ -189,8 +183,8 @@ public class StudentController {
                 // candidate had actually come for.
                 attemptService.markSeen(live.getId());
                 if (attemptService.getRemainingSeconds(live.getId()) <= 0) {
-                    submittedAny = true;
-                    submittedTitle = examForMapping.getTitle();
+                    refusals.add(new Refusal(live.getEndTime() != null ? live.getEndTime() : now,
+                            submittedMessage(examForMapping.getTitle())));
                     continue;
                 }
                 if (chosenExamId == null || chosenExamId.equals(mapping.getExamId())) {
@@ -206,7 +200,11 @@ public class StudentController {
                 // see a real sitting too. Only an exam with no sitting left to
                 // come leaves them out.
                 slot = slotService.sittingByClock(mapping.getExamId(), now, lobbyMinutes);
-                if (slot == null) { sittingMissing = true; continue; }
+                if (slot == null) {
+                    refusals.add(new Refusal(null,
+                            "There is no sitting of " + examForMapping.getTitle() + " left to sign in to. Ask your invigilator."));
+                    continue;
+                }
                 mapping.setSlotId(slot.getId());
                 examStudentRepository.save(mapping);
                 log.info("Candidate {} had no sitting for exam {}; placed in sitting {}.",
@@ -225,14 +223,13 @@ public class StudentController {
                 continue;
             }
             if (now.isBefore(doorsOpen)) {
-                if (nextStart == null || doorsOpen.isBefore(nextStart)) {
-                    nextStart = doorsOpen;
-                    nextTitle = examForMapping.getTitle();
-                }
-            } else if (closedAt == null || slot.getEndTime().isAfter(closedAt)) {
+                if (nextStart == null || doorsOpen.isBefore(nextStart)) nextStart = doorsOpen;
+                refusals.add(new Refusal(doorsOpen, "Entry to " + examForMapping.getTitle()
+                        + " has not opened yet. You can sign in from " + doorsOpen.format(WHEN) + "."));
+            } else {
                 // Entry has closed on a paper they never began.
-                closedAt = slot.getEndTime();
-                closedTitle = examForMapping.getTitle();
+                refusals.add(new Refusal(slot.getEndTime(), "Entry to " + examForMapping.getTitle()
+                        + " closed at " + slot.getEndTime().format(WHEN) + ". Ask your invigilator."));
             }
         }
 
@@ -267,34 +264,17 @@ public class StudentController {
         }
 
         if (valid == null) {
-            // The paper still to come comes first; a finished one only when
-            // there is nothing else. Each says which exam, so the right person
-            // fixes the right thing: the invigilator releases a paper, checks a
-            // sitting, or enrols the candidate in today's exam.
-            if (nextStart != null) {
-                return denied("Entry to " + nextTitle + " has not opened yet. You can sign in from "
-                        + nextStart.format(WHEN) + ".");
+            Refusal nearest = null;
+            for (Refusal r : refusals) {
+                if (nearest == null || r.distanceFrom(now) < nearest.distanceFrom(now)) nearest = r;
             }
-            if (awaitingRelease) {
-                return denied(releaseTitle + " has not been released yet. Ask your invigilator to publish it.");
-            }
-            if (sittingMissing) {
-                return denied("There is no sitting of your exam left to sign in to. Ask your invigilator.");
-            }
-            if (closedAt != null) {
-                return denied("Entry to " + closedTitle + " closed at " + closedAt.format(WHEN)
-                        + ". Ask your invigilator.");
-            }
-            if (submittedAny) {
-                return denied("You have already submitted " + submittedTitle
-                        + ". If you are here for a different exam, ask your invigilator to add you to it.");
-            }
-            return denied("Your exam window has closed.");
+            return denied(nearest != null ? nearest.message() : "Your exam window has closed.");
         }
 
         Attempt prior = attemptService.getAttempt(student.getId(), valid.getExamId());
         if (prior != null && "SUBMITTED".equals(prior.getStatus())) {
-            return denied("You have already submitted this exam.");
+            var exam = examRepository.findById(valid.getExamId()).orElse(null);
+            return denied(submittedMessage(exam == null ? "this exam" : exam.getTitle()));
         }
 
         Map<String, Object> body = new LinkedHashMap<>();
@@ -307,6 +287,18 @@ public class StudentController {
         body.put("examId", valid.getExamId());
         body.put("slotId", valid.getSlotId());
         return ResponseEntity.ok(body);
+    }
+
+    /** One exam's reason a candidate cannot enter it now, and the moment it belongs to. */
+    private record Refusal(LocalDateTime when, String message) {
+        /** Seconds from now, either way. A reason with no moment comes last. */
+        long distanceFrom(LocalDateTime now) {
+            return when == null ? Long.MAX_VALUE : Math.abs(java.time.Duration.between(when, now).getSeconds());
+        }
+    }
+
+    private static String submittedMessage(String title) {
+        return "You have already submitted " + title + ". Your answers are saved — you cannot sit it again.";
     }
 
     /** How a time reads to a candidate: "12:00 PM, 24 Nov", not "2026-11-24T12:00". */
