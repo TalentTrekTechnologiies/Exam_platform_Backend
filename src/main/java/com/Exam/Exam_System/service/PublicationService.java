@@ -199,13 +199,20 @@ public class PublicationService {
             warnings.add("No candidates are enrolled yet. You can publish now and enrol them later.");
         }
 
-        // Slots shorter than the paper quietly truncate everyone's time.
+        // A slot's end is the last moment to START: everyone gets the full
+        // duration from when they begin, so a short slot cuts nobody short.
+        // (This used to warn that a 5-minute slot would truncate a 3-hour
+        // paper, which stopped being true when late starters got full time.)
+        // What is worth saying is late entry left open as long as the paper:
+        // someone starting at the end of it can meet candidates who have
+        // already finished, and hear the questions before they answer them.
         slotRepository.findAllByExamId(exam.getId()).forEach(slot -> {
             if (slot.getStartTime() == null || slot.getEndTime() == null) return;
-            long windowMinutes = java.time.Duration.between(slot.getStartTime(), slot.getEndTime()).toMinutes();
-            if (exam.getDuration() != null && windowMinutes < exam.getDuration()) {
-                warnings.add("A slot is only " + windowMinutes + " minutes long but the paper is "
-                        + exam.getDuration() + " minutes — candidates' time will be cut short.");
+            long lateEntry = java.time.Duration.between(slot.getStartTime(), slot.getEndTime()).toMinutes();
+            if (exam.getDuration() != null && exam.getDuration() > 0 && lateEntry >= exam.getDuration()) {
+                warnings.add("A sitting lets candidates start up to " + lateEntry + " minutes late, as long as the "
+                        + exam.getDuration() + "-minute paper itself. A late starter can meet candidates who have "
+                        + "already finished. Shorten its buffer on the Slots page if that is not intended.");
             }
         });
 
