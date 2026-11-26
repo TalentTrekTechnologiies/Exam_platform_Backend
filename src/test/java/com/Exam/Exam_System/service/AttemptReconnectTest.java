@@ -74,7 +74,9 @@ class AttemptReconnectTest {
         // The grant statement matched: this candidate was away long enough.
         when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any())).thenReturn(1);
 
-        attempts.markSeen(ATTEMPT);
+        // Reported, so a late answer from a reconnecting browser is accepted
+        // rather than treated as arriving after the deadline.
+        assertTrue(attempts.markSeen(ATTEMPT), "time was returned");
 
         // Without this the deadline moves in the database and the candidate is
         // served the old one from cache until it happens to be evicted — they
@@ -105,6 +107,11 @@ class AttemptReconnectTest {
         assertEquals(ATTEMPT, passed.get(2));
         assertEquals(GRACE, passed.get(3), "a silence shorter than the grace period is not a disconnection");
         assertEquals(CAP, passed.get(4), "a candidate at the cap gets nothing further");
+
+        // The slot's close is the last moment to start, not a ceiling on time
+        // owed: someone who began at 5:10 and dropped at 5:58 gets it back.
+        assertFalse(sql.getValue().contains("exam_slots"),
+                "returned time must not be cut off at the slot's close");
     }
 
     @Test
@@ -115,7 +122,7 @@ class AttemptReconnectTest {
         // whatever it likes, because markSeen does not read it.
         when(jdbcTemplate.update(anyString(), any(), any(), any(), any(), any())).thenReturn(0);
 
-        attempts.markSeen(ATTEMPT);
+        assertFalse(attempts.markSeen(ATTEMPT), "an ordinary poll returns no time");
 
         // Evicting on every poll would defeat the cache the clock is served
         // from — a database read per candidate every twenty seconds.

@@ -153,6 +153,19 @@ public class StudentController {
 
             var slot = slotService.getSlotById(mapping.getSlotId());
 
+            // Someone who started and has not finished can always sign back in,
+            // whatever the time. Their deadline is their own, counted from when
+            // they began, and may run past the slot's close: a candidate who
+            // started at 5:10, lost power at 5:58 and is back at 6:03 must not
+            // be told their window has closed with an hour's paper half written.
+            Attempt live = attemptService.getAttempt(student.getId(), mapping.getExamId());
+            if (live != null && AttemptService.STARTED.equals(live.getStatus())) {
+                if (chosenExamId == null || chosenExamId.equals(mapping.getExamId())) {
+                    openNow.add(mapping);
+                }
+                continue;
+            }
+
             // The doors open before the paper does: from lobbyMinutes ahead of
             // the start a candidate may come in, watch the introduction and read
             // the rules. The paper itself is still held until the start — that
@@ -273,6 +286,12 @@ public class StudentController {
         }
 
         Attempt attempt = attemptService.startOrResume(studentId, examId, mapping.getSlotId());
+
+        // Coming back after a dropped connection or a closed browser: give back
+        // the time that cost before reading the clock. Read first, a deadline
+        // that passed while they were away would submit the paper here, before
+        // the time they were owed was ever returned.
+        attemptService.markSeen(attempt.getId());
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("attemptId", attempt.getId());

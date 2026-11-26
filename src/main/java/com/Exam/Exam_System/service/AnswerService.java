@@ -54,13 +54,16 @@ public class AnswerService {
     private final ScoringService scoringService;
     private final JdbcTemplate jdbcTemplate;
     private final SectionClockService sectionClock;
+    private final AttemptService attemptService;
 
     public AnswerService(AnswerRepository answerRepository,
                          AttemptRepository attemptRepository,
                          AttemptQuestionRepository attemptQuestionRepository,
                          ScoringService scoringService,
                          JdbcTemplate jdbcTemplate,
-                         SectionClockService sectionClock) {
+                         SectionClockService sectionClock,
+                         @org.springframework.context.annotation.Lazy AttemptService attemptService) {
+        this.attemptService = attemptService;
         this.answerRepository = answerRepository;
         this.attemptRepository = attemptRepository;
         this.attemptQuestionRepository = attemptQuestionRepository;
@@ -102,7 +105,7 @@ public class AnswerService {
         // re-picked the option they already had. Only then do we pay for the
         // slower query that tells the two apart and names the reason.
         if (affected == 0) {
-            explainRejection(attemptId, studentId, questionId);
+            explainRejection(attemptId, studentId, questionId, normalized);
         }
         return normalized;
     }
@@ -137,7 +140,7 @@ public class AnswerService {
      * Works out why the fast path wrote nothing, and throws the specific error.
      * Returns normally when the write was a genuine no-op (same option re-picked).
      */
-    private void explainRejection(Long attemptId, Long studentId, Long questionId) {
+    private void explainRejection(Long attemptId, Long studentId, Long questionId, String normalized) {
         Attempt attempt = attemptRepository.findById(attemptId)
                 .orElseThrow(() -> new NoSuchElementException("Attempt not found"));
 
@@ -148,6 +151,15 @@ public class AnswerService {
             throw new IllegalStateException("EXAM_ALREADY_SUBMITTED");
         }
         if (attempt.getEndTime() == null || LocalDateTime.now().isAfter(attempt.getEndTime())) {
+            // Back from a dropped connection, the browser sends its queued
+            // answers at once -- before the clock poll that would return the
+            // time the drop cost. If the deadline passed while they were away,
+            // treating this as late would submit a paper that is owed time.
+            // Return it first; if that reopens the paper, the answer counts.
+            if (attempt.getEndTime() != null && attemptService.markSeen(attemptId)
+                    && jdbcTemplate.update(UPSERT, normalized, questionId, attemptId, studentId) > 0) {
+                return;
+            }
             scoringService.submit(attemptId, "auto-submit: answer received after expiry");
             throw new IllegalStateException("EXAM_TIME_OVER");
         }

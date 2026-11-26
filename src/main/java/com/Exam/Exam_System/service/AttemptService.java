@@ -2,7 +2,6 @@ package com.Exam.Exam_System.service;
 
 import com.Exam.Exam_System.Entity.Attempt;
 import com.Exam.Exam_System.Entity.ExamStudent;
-import com.Exam.Exam_System.Entity.Slot;
 import com.Exam.Exam_System.dto.ResultResponse;
 import com.Exam.Exam_System.repository.AttemptRepository;
 import com.Exam.Exam_System.repository.ExamRepository;
@@ -49,10 +48,10 @@ public class AttemptService {
     /**
      * How long a silence has to last before it counts as a disconnection.
      *
-     * The paper polls every twenty seconds, so anything under a minute is
-     * ordinary jitter -- a slow network, a garbage collection, a laptop lid
-     * closed for a moment. Returning time for those would hand out seconds
-     * nobody lost.
+     * The paper polls every twenty seconds, so a silence of up to about two
+     * polls is ordinary jitter -- a slow response, a garbage collection.
+     * Returning time for those would hand out seconds nobody lost. Anything
+     * longer is a real drop, and all of it is given back.
      */
     @Value("${exam.reconnect.grace-seconds:60}")
     private int reconnectGraceSeconds;
@@ -119,16 +118,12 @@ public class AttemptService {
                 .orElseThrow(() -> new NoSuchElementException("Exam not found"))
                 .getDuration();
 
+        // The full duration from the moment they start, whenever that is. A
+        // candidate who arrives at 5:10 for a 5:00 sitting of one hour writes
+        // until 6:10. The slot's end is the last moment to START, checked at
+        // sign-in; it no longer cuts short the people who began in time.
         LocalDateTime now = LocalDateTime.now();
         LocalDateTime endTime = now.plusMinutes(durationMinutes);
-
-        // A candidate who logs in 20 minutes before the slot closes does not get
-        // the full paper duration — the slot window is the hard ceiling.
-        Slot slot = slotId == null ? null : slotRepository.findById(slotId).orElse(null);
-        if (slot != null && slot.getEndTime() != null && endTime.isAfter(slot.getEndTime())) {
-            endTime = slot.getEndTime();
-            log.info("Attempt for student {} capped to slot end {}.", studentId, endTime);
-        }
 
         Attempt attempt = new Attempt();
         attempt.setStudentId(studentId);
@@ -156,8 +151,8 @@ public class AttemptService {
     /**
      * Starts the clock on an attempt whose paper is already frozen.
      *
-     * One statement does the whole job: it reads the exam's duration, caps the
-     * deadline at the slot's close, and flips the status — atomically, and only
+     * One statement does the whole job: it reads the exam's duration, sets the
+     * deadline that far from now, and flips the status — atomically, and only
      * if the attempt is still PENDING, so two simultaneous clicks cannot double
      * start it. This is the hot path at slot-open, when thousands of candidates
      * hit Start in the same second, so it is deliberately one round trip rather
@@ -166,13 +161,9 @@ public class AttemptService {
     private static final String ACTIVATE = """
             UPDATE attempts a
               JOIN exams e ON e.id = a.exam_id
-              LEFT JOIN exam_slots s ON s.id = a.slot_id
                SET a.status     = 'STARTED',
                    a.start_time = NOW(),
-                   a.end_time   = LEAST(
-                       DATE_ADD(NOW(), INTERVAL e.duration MINUTE),
-                       COALESCE(s.end_time, DATE_ADD(NOW(), INTERVAL e.duration MINUTE))
-                   )
+                   a.end_time   = DATE_ADD(NOW(), INTERVAL e.duration MINUTE)
              WHERE a.id = ? AND a.status = 'PENDING'
             """;
 
@@ -297,9 +288,10 @@ public class AttemptService {
      * Returns the time a disconnection cost, and stamps the heartbeat with it.
      *
      * Runs when a candidate's browser speaks again after a silence longer than
-     * the grace period. The gap is added to their deadline, capped twice over:
-     * at whatever is left of their personal allowance, and at the close of the
-     * slot, which is a hard ceiling nothing may push a candidate past.
+     * the grace period. The gap is added to their deadline, capped at whatever
+     * is left of their personal allowance. Not at the slot's close: that is the
+     * last moment to start, and a candidate who started in time and then lost
+     * their connection is owed the time they lost whatever the clock says.
      *
      * Deliberately one statement. The read-then-write version of this has a
      * race that two browser tabs, or a reconnect landing beside a retry, would
@@ -308,12 +300,9 @@ public class AttemptService {
      */
     private static final String GRANT_RECONNECT_TIME = """
             UPDATE attempts a
-              LEFT JOIN exam_slots s ON s.id = a.slot_id
-               SET a.end_time = LEAST(
-                       DATE_ADD(a.end_time, INTERVAL LEAST(
+               SET a.end_time = DATE_ADD(a.end_time, INTERVAL LEAST(
                            TIMESTAMPDIFF(SECOND, a.last_seen_at, NOW()),
                            ? - a.extended_seconds) SECOND),
-                       COALESCE(s.end_time, DATE_ADD(a.end_time, INTERVAL 1 DAY))),
                    a.extended_seconds = a.extended_seconds + LEAST(
                        TIMESTAMPDIFF(SECOND, a.last_seen_at, NOW()),
                        ? - a.extended_seconds),
@@ -338,8 +327,10 @@ public class AttemptService {
      * Failure is swallowed. A missed heartbeat is an invigilator seeing a stale
      * status for twenty seconds; an exception here would be a candidate's clock
      * poll failing, which is far worse.
+     *
+     * Returns true when this call gave back time lost to a disconnection.
      */
-    public void markSeen(Long attemptId) {
+    public boolean markSeen(Long attemptId) {
         try {
             // The gap case first. Its WHERE matches only after a real silence,
             // so on the overwhelming majority of polls this touches nothing.
@@ -353,7 +344,7 @@ public class AttemptService {
                 // time and then never sees it.
                 attemptCache.invalidate(attemptId);
                 log.info("Attempt {} reconnected after a gap; exam time returned.", attemptId);
-                return;
+                return true;
             }
 
             jdbcTemplate.update(
@@ -362,6 +353,7 @@ public class AttemptService {
         } catch (RuntimeException e) {
             log.debug("Could not stamp last_seen_at for attempt {}: {}", attemptId, e.toString());
         }
+        return false;
     }
 
     public long getRemainingSeconds(Long attemptId) {
