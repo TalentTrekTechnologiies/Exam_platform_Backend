@@ -143,6 +143,8 @@ public class StudentController {
         // their window had closed — sending an invigilator to check the
         // timetable when the paper simply had not been released.
         boolean awaitingRelease = false;
+        // Enrolled against a sitting that no longer exists.
+        boolean sittingMissing = false;
 
         for (ExamStudent mapping : mappings) {
             if (mapping.getSlotId() == null) continue;
@@ -153,8 +155,6 @@ public class StudentController {
             var examForMapping = examRepository.findById(mapping.getExamId()).orElse(null);
             if (examForMapping == null) continue;
             if (!examForMapping.isPublished()) { awaitingRelease = true; continue; }
-
-            var slot = slotService.getSlotById(mapping.getSlotId());
 
             // Someone who started and has not finished can always sign back in,
             // whatever the time. Their deadline is their own, counted from when
@@ -168,6 +168,9 @@ public class StudentController {
                 }
                 continue;
             }
+
+            var slot = slotService.findSlot(mapping.getSlotId()).orElse(null);
+            if (slot == null) { sittingMissing = true; continue; }
 
             // The doors open before the paper does: from lobbyMinutes ahead of
             // the start a candidate may come in, watch the introduction and read
@@ -198,7 +201,7 @@ public class StudentController {
             for (ExamStudent m : openNow) {
                 var e = examRepository.findById(m.getExamId()).orElse(null);
                 if (e == null) continue;
-                var slot = slotService.getSlotById(m.getSlotId());
+                var slot = slotService.findSlot(m.getSlotId()).orElse(null);
                 Map<String, Object> choice = new LinkedHashMap<>();
                 choice.put("examId", m.getExamId());
                 choice.put("examTitle", e.getTitle());
@@ -222,6 +225,9 @@ public class StudentController {
             }
             // Says which of the two it is, so the right person fixes the right
             // thing: the invigilator releases the paper, or checks the sitting.
+            if (sittingMissing) {
+                return denied("Your exam sitting was removed. Ask your invigilator to put you in a sitting.");
+            }
             return denied(awaitingRelease
                     ? "Your exam has not been released yet. Ask your invigilator to publish it."
                     : "Your exam window has closed.");
@@ -343,8 +349,8 @@ public class StudentController {
         // Signing in early only admits a candidate to the briefing. The paper
         // opens at the sitting's start for everybody, whatever their own clock
         // or a hand-crafted request says.
-        if (mapping.getSlotId() != null) {
-            var slot = slotService.getSlotById(mapping.getSlotId());
+        var slot = slotService.findSlot(mapping.getSlotId()).orElse(null);
+        if (slot != null) {
             if (slot.getStartTime() != null && LocalDateTime.now().isBefore(slot.getStartTime())) {
                 throw new IllegalStateException(
                         "The exam opens at " + slot.getStartTime().format(WHEN) + ". Please wait.");
@@ -636,8 +642,9 @@ public class StudentController {
         if (!currentUser.get().isAdmin()) {
             ExamStudent mapping = examStudentRepository
                     .findByStudentIdAndExamId(currentUser.studentId(), examId);
-            if (mapping != null && mapping.getSlotId() != null) {
-                data.put("opensAt", slotService.getSlotById(mapping.getSlotId()).getStartTime());
+            if (mapping != null) {
+                slotService.findSlot(mapping.getSlotId())
+                        .ifPresent(slot -> data.put("opensAt", slot.getStartTime()));
             }
         }
         return data;

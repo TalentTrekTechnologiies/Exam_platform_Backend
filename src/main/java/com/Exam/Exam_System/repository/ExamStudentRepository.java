@@ -47,6 +47,9 @@ public interface ExamStudentRepository
 
     boolean existsByStudentIdAndExamId(Long studentId, Long examId);
 
+    /** How many candidates are enrolled in one sitting. */
+    long countBySlotId(Long slotId);
+
     /**
      * Enrols a candidate unless they are already in the exam, in one statement.
      *

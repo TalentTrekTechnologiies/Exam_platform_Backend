@@ -41,6 +41,52 @@ public class EnrolmentIntegrity implements ApplicationRunner {
 
     @Override
     public void run(ApplicationArguments args) {
+        repairRemovedSittings();
+        ensureOneEnrolmentPerExam();
+    }
+
+    /**
+     * Enrolments naming a sitting that has since been deleted.
+     *
+     * Deleting a slot with candidates in it used to be allowed, and left each
+     * of them unable to sign in at all. Where the exam has exactly one sitting
+     * left, that is the only place they can have meant, so they are moved
+     * there. Where it has several, choosing for them could put a candidate in
+     * the wrong batch, so they are left for the college to place and sign-in
+     * tells them to ask the invigilator. Runs every start; nothing to do after.
+     */
+    private void repairRemovedSittings() {
+        int moved = jdbc.update("""
+                UPDATE exam_student es
+                  JOIN (SELECT exam_id, MIN(id) AS only_slot
+                          FROM exam_slots
+                         GROUP BY exam_id
+                        HAVING COUNT(*) = 1) one ON one.exam_id = es.exam_id
+                  LEFT JOIN exam_slots gone ON gone.id = es.slot_id
+                   SET es.slot_id = one.only_slot
+                 WHERE es.slot_id IS NOT NULL
+                   AND gone.id IS NULL
+                """);
+        if (moved > 0) {
+            log.warn("Moved {} candidate(s) whose sitting had been deleted into their exam's only remaining sitting.",
+                    moved);
+        }
+
+        var stranded = jdbc.queryForList("""
+                SELECT es.exam_id, COUNT(*) AS candidates
+                  FROM exam_student es
+                  LEFT JOIN exam_slots s ON s.id = es.slot_id
+                 WHERE es.slot_id IS NOT NULL AND s.id IS NULL
+                 GROUP BY es.exam_id
+                """);
+        for (var row : stranded) {
+            log.warn("Exam {}: {} candidate(s) are in a sitting that was deleted and cannot sign in. "
+                            + "Move them to a sitting from the roster on Add Candidates.",
+                    row.get("exam_id"), row.get("candidates"));
+        }
+    }
+
+    private void ensureOneEnrolmentPerExam() {
         Integer present = jdbc.queryForObject("""
                 SELECT COUNT(*) FROM information_schema.STATISTICS
                  WHERE TABLE_SCHEMA = DATABASE()

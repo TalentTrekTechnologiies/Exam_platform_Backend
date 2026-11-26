@@ -46,6 +46,15 @@ public class SlotService {
  // SlotService only needs to know about slot timing (access window)
  // Duration is fetched directly from ExamRepository in StudentController
  // No changes needed here - method is simply removed/unused
+    /**
+     * The slot, if it still exists. A candidate's enrolment can outlive the
+     * slot it names (one deleted before the delete was refused), and sign-in
+     * must say so plainly rather than fail with a server error.
+     */
+    public Optional<Slot> findSlot(Long slotId) {
+        return slotId == null ? Optional.empty() : slotRepository.findById(slotId);
+    }
+
     public Slot getSlotById(Long slotId) {
         return slotRepository.findById(slotId)
                 .orElseThrow(() -> new RuntimeException("Slot not found"));

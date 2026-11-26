@@ -15,10 +15,13 @@ public class SlotController {
     private final SlotService slotService;
     private final SlotRepository slotRepository;
     private final AccessGuard accessGuard;
+    private final com.Exam.Exam_System.repository.ExamStudentRepository examStudentRepository;
 
     public SlotController(SlotService slotService,
                           SlotRepository slotRepository,
-                          AccessGuard accessGuard) {
+                          AccessGuard accessGuard,
+                          com.Exam.Exam_System.repository.ExamStudentRepository examStudentRepository) {
+        this.examStudentRepository = examStudentRepository;
         this.slotService = slotService;
         this.slotRepository = slotRepository;
         this.accessGuard = accessGuard;
@@ -75,6 +78,16 @@ public class SlotController {
     @DeleteMapping("/{id}")
     public void deleteSlot(@PathVariable Long id) {
         accessGuard.requireOwnedSlot(id);
+
+        // Deleting a sitting people are enrolled in left their enrolment naming
+        // a slot that no longer existed, and every one of them was turned away
+        // at sign-in with a server error. Moving the time is what an edit is
+        // for; moving the people is what the roster's sitting picker is for.
+        long enrolled = examStudentRepository.countBySlotId(id);
+        if (enrolled > 0) {
+            throw new IllegalStateException(enrolled + " candidate(s) are in this sitting. Change its time "
+                    + "with Edit, or move them to another sitting first (Add Candidates, roster).");
+        }
         slotRepository.deleteById(id);
     }
 }
