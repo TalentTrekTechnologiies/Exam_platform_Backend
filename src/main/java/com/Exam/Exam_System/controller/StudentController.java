@@ -147,6 +147,11 @@ public class StudentController {
         boolean sittingMissing = false;
         // A paper this candidate has already handed in.
         boolean submittedAny = false;
+        // Named in the refusal, so a candidate with an old paper finished and
+        // today's not yet open is not told "already submitted" about the wrong
+        // exam -- which is exactly what they were told.
+        String submittedTitle = null, releaseTitle = null, nextTitle = null, closedTitle = null;
+        LocalDateTime closedAt = null;
 
         for (ExamStudent mapping : mappings) {
             if (mapping.getSlotId() == null) continue;
@@ -156,7 +161,11 @@ public class StudentController {
             // answer key being walked into by a candidate who has the link.
             var examForMapping = examRepository.findById(mapping.getExamId()).orElse(null);
             if (examForMapping == null) continue;
-            if (!examForMapping.isPublished()) { awaitingRelease = true; continue; }
+            if (!examForMapping.isPublished()) {
+                awaitingRelease = true;
+                releaseTitle = examForMapping.getTitle();
+                continue;
+            }
 
             // Someone who started and has not finished can always sign back in,
             // whatever the time. Their deadline is their own, counted from when
@@ -166,7 +175,11 @@ public class StudentController {
             Attempt live = attemptService.getAttempt(student.getId(), mapping.getExamId());
             // Handed in: never offered again. Left in, a candidate enrolled in
             // two papers was shown the one they had finished as a choice.
-            if (live != null && "SUBMITTED".equals(live.getStatus())) { submittedAny = true; continue; }
+            if (live != null && "SUBMITTED".equals(live.getStatus())) {
+                submittedAny = true;
+                submittedTitle = examForMapping.getTitle();
+                continue;
+            }
             if (live != null && AttemptService.STARTED.equals(live.getStatus())) {
                 // Begun but never handed in -- a closed browser, a lost
                 // connection. Return any time the gap is owed, then ask the
@@ -177,6 +190,7 @@ public class StudentController {
                 attemptService.markSeen(live.getId());
                 if (attemptService.getRemainingSeconds(live.getId()) <= 0) {
                     submittedAny = true;
+                    submittedTitle = examForMapping.getTitle();
                     continue;
                 }
                 if (chosenExamId == null || chosenExamId.equals(mapping.getExamId())) {
@@ -210,8 +224,15 @@ public class StudentController {
                 }
                 continue;
             }
-            if (now.isBefore(doorsOpen) && (nextStart == null || doorsOpen.isBefore(nextStart))) {
-                nextStart = doorsOpen;
+            if (now.isBefore(doorsOpen)) {
+                if (nextStart == null || doorsOpen.isBefore(nextStart)) {
+                    nextStart = doorsOpen;
+                    nextTitle = examForMapping.getTitle();
+                }
+            } else if (closedAt == null || slot.getEndTime().isAfter(closedAt)) {
+                // Entry has closed on a paper they never began.
+                closedAt = slot.getEndTime();
+                closedTitle = examForMapping.getTitle();
             }
         }
 
@@ -246,21 +267,29 @@ public class StudentController {
         }
 
         if (valid == null) {
+            // The paper still to come comes first; a finished one only when
+            // there is nothing else. Each says which exam, so the right person
+            // fixes the right thing: the invigilator releases a paper, checks a
+            // sitting, or enrols the candidate in today's exam.
             if (nextStart != null) {
-                return denied("Entry to your exam has not opened yet. You can sign in from "
+                return denied("Entry to " + nextTitle + " has not opened yet. You can sign in from "
                         + nextStart.format(WHEN) + ".");
             }
-            // Says which of the two it is, so the right person fixes the right
-            // thing: the invigilator releases the paper, or checks the sitting.
-            if (submittedAny) {
-                return denied("You have already submitted this exam.");
+            if (awaitingRelease) {
+                return denied(releaseTitle + " has not been released yet. Ask your invigilator to publish it.");
             }
             if (sittingMissing) {
                 return denied("There is no sitting of your exam left to sign in to. Ask your invigilator.");
             }
-            return denied(awaitingRelease
-                    ? "Your exam has not been released yet. Ask your invigilator to publish it."
-                    : "Your exam window has closed.");
+            if (closedAt != null) {
+                return denied("Entry to " + closedTitle + " closed at " + closedAt.format(WHEN)
+                        + ". Ask your invigilator.");
+            }
+            if (submittedAny) {
+                return denied("You have already submitted " + submittedTitle
+                        + ". If you are here for a different exam, ask your invigilator to add you to it.");
+            }
+            return denied("Your exam window has closed.");
         }
 
         Attempt prior = attemptService.getAttempt(student.getId(), valid.getExamId());
