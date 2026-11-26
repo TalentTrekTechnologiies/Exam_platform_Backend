@@ -51,6 +51,24 @@ public class Student {
     private String phone;
 
     /**
+     * Branch and year of study, e.g. "MECH" and "3". Optional: read from the
+     * roster when the file has those columns, and carried into the results
+     * export so a college can sort its marks by department.
+     */
+    @Column(length = 60)
+    private String branch;
+
+    /** Stored as study_year: YEAR is a MySQL keyword. Free text: "3", "III", "2026". */
+    @Column(name = "study_year", length = 20)
+    private String year;
+
+    public String getBranch() { return branch; }
+    public void setBranch(String branch) { this.branch = branch; }
+
+    public String getYear() { return year; }
+    public void setYear(String year) { this.year = year; }
+
+    /**
      * When this candidate was taken off the college's books, or null.
      *
      * Removed rather than deleted, because the results are not the candidate's

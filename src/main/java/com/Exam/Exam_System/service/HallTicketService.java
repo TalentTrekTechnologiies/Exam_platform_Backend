@@ -54,6 +54,13 @@ public class HallTicketService {
     @Transactional
     public IssueReport issue(Long adminId, Long examId, Long slotId,
                              String prefix, int padding, List<String> names) {
+        return issue(adminId, examId, slotId, prefix, padding, names, null, null);
+    }
+
+    @Transactional
+    public IssueReport issue(Long adminId, Long examId, Long slotId,
+                             String prefix, int padding, List<String> names,
+                             String branch, String year) {
 
         String cleanPrefix = prefix == null ? "" : prefix.trim().toUpperCase(Locale.ROOT);
         if (cleanPrefix.isBlank()) {
@@ -106,7 +113,7 @@ public class HallTicketService {
                     ticket = cleanPrefix + String.format("%0" + width + "d", next++);
                 } while (studentRepository.findByAdminIdAndHallTicketIgnoreCase(adminId, ticket).isPresent());
 
-                student = studentService.saveOrGet(adminId, ticket, name);
+                student = studentService.saveOrGet(adminId, ticket, name, branch, year);
                 created = true;
             }
 

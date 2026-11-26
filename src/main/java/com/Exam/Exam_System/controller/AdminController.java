@@ -335,10 +335,12 @@ public class AdminController {
 
                 String hallTicket = fields.get(0);
                 String name = fields.get(1);
+                String branch = fields.size() > 2 ? fields.get(2) : "";
+                String year = fields.size() > 3 ? fields.get(3) : "";
 
                 // Scoped to THIS institution: another college's candidate with the
                 // same roll number must never be adopted into this roster.
-                var student = findOrCreateStudent(hallTicket, name);
+                var student = findOrCreateStudent(hallTicket, name, branch, year);
 
                 if (examStudentRepository.enrolIfAbsent(student.getId(), examId, slotId) == 0) {
                     report.recordError(lineNumber, "Already assigned to this exam.", line);
@@ -395,13 +397,15 @@ public class AdminController {
             }
             String hallTicket = text(map.get("hallTicket"));
             String name = text(map.get("name"));
+            String branch = text(map.get("branch"));
+            String year = text(map.get("year"));
 
             if (hallTicket.isBlank() || name.isBlank()) {
                 report.recordError(line, "Both a hall ticket and a name are required.", hallTicket);
                 continue;
             }
 
-            var student = findOrCreateStudent(hallTicket, name);
+            var student = findOrCreateStudent(hallTicket, name, branch, year);
             if (examStudentRepository.enrolIfAbsent(student.getId(), examId, slotId) == 0) {
                 report.recordError(line, "Already enrolled in this exam.", hallTicket);
                 continue;
@@ -421,11 +425,12 @@ public class AdminController {
      * exists". By the time the refusal arrives the other request has written the
      * student, so looking again finds them.
      */
-    private com.Exam.Exam_System.Entity.Student findOrCreateStudent(String hallTicket, String name) {
+    private com.Exam.Exam_System.Entity.Student findOrCreateStudent(String hallTicket, String name,
+                                                                    String branch, String year) {
         try {
-            return studentService.saveOrGet(currentUser.adminId(), hallTicket, name);
+            return studentService.saveOrGet(currentUser.adminId(), hallTicket, name, branch, year);
         } catch (org.springframework.dao.DataIntegrityViolationException race) {
-            return studentService.saveOrGet(currentUser.adminId(), hallTicket, name);
+            return studentService.saveOrGet(currentUser.adminId(), hallTicket, name, branch, year);
         }
     }
 
@@ -470,7 +475,12 @@ public class AdminController {
         String prefix = String.valueOf(request.getOrDefault("prefix", ""));
         int padding = request.get("padding") == null ? 3 : Integer.parseInt(request.get("padding").toString());
 
-        return hallTicketService.issue(currentUser.adminId(), examId, slotId, prefix, padding, names);
+        // One branch and year for the whole list: a pasted batch is one class.
+        String branch = text(request.get("branch"));
+        String year = text(request.get("year"));
+
+        return hallTicketService.issue(currentUser.adminId(), examId, slotId, prefix, padding, names,
+                branch, year);
     }
 
     /** Candidates for this admin's exams only. */

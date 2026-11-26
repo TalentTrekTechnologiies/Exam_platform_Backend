@@ -3,6 +3,7 @@ package com.Exam.Exam_System.controller;
 import com.Exam.Exam_System.Entity.Exam;
 import com.Exam.Exam_System.security.AccessGuard;
 import com.Exam.Exam_System.security.CurrentUser;
+import com.Exam.Exam_System.service.PaperService;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 
@@ -30,9 +31,11 @@ public class ReportController {
     private final JdbcTemplate jdbc;
     private final AccessGuard accessGuard;
     private final CurrentUser currentUser;
+    private final PaperService paperService;
 
     public ReportController(JdbcTemplate jdbc, AccessGuard accessGuard,
-                            CurrentUser currentUser) {
+                            CurrentUser currentUser, PaperService paperService) {
+        this.paperService = paperService;
         this.currentUser = currentUser;
         this.jdbc = jdbc;
         this.accessGuard = accessGuard;
@@ -41,6 +44,8 @@ public class ReportController {
     private static final String ROSTER = """
             SELECT s.hall_ticket,
                    s.name,
+                   s.branch,
+                   s.study_year,
                    a.status       AS attempt_status,
                    a.score,
                    a.submitted_at
@@ -109,10 +114,25 @@ public class ReportController {
     public Map<String, Object> report(@PathVariable Long examId) {
         Exam exam = accessGuard.requireOwnedExam(examId);
 
+        // What the paper is out of, for the percentage. From the same
+        // description the candidate's briefing shows, so a paper that draws a
+        // set number of questions from a larger pool counts what was drawn,
+        // not everything in the bank.
+        double totalMarks = 0;
+        try {
+            Object t = paperService.describeStructure(examId).get("totalMarks");
+            if (t instanceof Number n) totalMarks = n.doubleValue();
+        } catch (RuntimeException e) {
+            totalMarks = 0;   // a percentage nobody can compute is left blank, not guessed
+        }
+        final double outOf = totalMarks;
+
         List<Map<String, Object>> rows = jdbc.query(ROSTER, (rs, i) -> {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("hallTicket", rs.getString("hall_ticket"));
             row.put("name", rs.getString("name"));
+            row.put("branch", rs.getString("branch"));
+            row.put("year", rs.getString("study_year"));
             String status = rs.getString("attempt_status");
             Object score = rs.getObject("score");
             boolean submitted = "SUBMITTED".equals(status);
@@ -121,6 +141,11 @@ public class ReportController {
             // never-started candidate has none — shown as such, never as a zero,
             // because a real zero and "didn't sit it" mean very different things.
             row.put("score", submitted ? score : null);
+            // Two decimals. Can be below zero on a paper with negative marking,
+            // which is what the candidate actually scored, so it is not clamped.
+            row.put("percentage", submitted && score instanceof Number n && outOf > 0
+                    ? Math.round(n.doubleValue() / outOf * 10000) / 100.0
+                    : null);
             Timestamp submittedAt = rs.getTimestamp("submitted_at");
             row.put("submittedAt", submittedAt == null ? null : submittedAt.toLocalDateTime());
             return row;
@@ -151,6 +176,7 @@ public class ReportController {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("examId", examId);
         out.put("examTitle", exam.getTitle());
+        out.put("totalMarks", outOf > 0 ? outOf : null);
         out.put("resultsReleased", exam.isResultsReleased());
         out.put("resultsReleasedAt", exam.getResultsReleasedAt());
         out.put("totalCandidates", rows.size());

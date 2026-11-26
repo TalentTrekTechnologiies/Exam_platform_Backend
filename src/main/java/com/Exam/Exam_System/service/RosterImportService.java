@@ -44,11 +44,20 @@ public class RosterImportService {
             "name", "student name", "studentname", "candidate", "candidate name",
             "full name", "fullname", "student");
 
+    /** Header words for the optional branch column. */
+    private static final Set<String> BRANCH_HEADERS = Set.of(
+            "branch", "department", "dept", "stream", "course", "programme", "program",
+            "discipline", "specialisation", "specialization");
+
+    /** Header words for the optional year-of-study column. */
+    private static final Set<String> YEAR_HEADERS = Set.of(
+            "year", "yr", "year of study", "study year", "academic year", "batch", "class");
+
     /** A hall ticket is dense and alphanumeric; a name is not. */
     private static final Pattern LOOKS_LIKE_TICKET = Pattern.compile("^[A-Za-z0-9][A-Za-z0-9/_-]{2,29}$");
 
     /** One roster row, as proposed. */
-    public record RosterRow(String hallTicket, String name, String issue) {
+    public record RosterRow(String hallTicket, String name, String branch, String year, String issue) {
         public boolean isUsable() { return issue == null; }
     }
 
@@ -196,6 +205,8 @@ public class RosterImportService {
         int ticketCol = 0;
         int nameCol = 1;
         int startRow = 0;
+        int branchCol = -1;
+        int yearCol = -1;
 
         // Prefer explicit headers; fall back to shape when there are none.
         List<String> first = table.get(0);
@@ -206,6 +217,10 @@ public class RosterImportService {
             ticketCol = headerTicket;
             nameCol = headerName;
             startRow = 1;
+            // Only ever from a header: a column of "MECH" or "3" cannot be told
+            // apart from anything else by its values alone.
+            branchCol = indexOfHeader(first, BRANCH_HEADERS);
+            yearCol = indexOfHeader(first, YEAR_HEADERS);
         } else if (first.size() >= 2) {
             // No headers: whichever column looks like an identifier is the ticket.
             if (!LOOKS_LIKE_TICKET.matcher(first.get(0)).matches()
@@ -260,7 +275,7 @@ public class RosterImportService {
                 issue = "Duplicate hall ticket in this file.";
             }
 
-            rows.add(new RosterRow(ticket, name, issue));
+            rows.add(new RosterRow(ticket, name, cell(cells, branchCol), cell(cells, yearCol), issue));
         }
 
         int usable = (int) rows.stream().filter(RosterRow::isUsable).count();

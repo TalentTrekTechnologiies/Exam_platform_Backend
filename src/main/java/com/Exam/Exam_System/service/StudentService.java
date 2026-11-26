@@ -73,6 +73,35 @@ public class StudentService {
      */
     @Transactional
     public Student saveOrGet(Long adminId, String hallTicket, String name) {
+        return saveOrGet(adminId, hallTicket, name, null, null);
+    }
+
+    /**
+     * As above, also recording branch and year when the roster carries them.
+     * A blank value leaves what is stored alone, so a later upload without
+     * those columns does not wipe them; a filled one corrects them.
+     */
+    @Transactional
+    public Student saveOrGet(Long adminId, String hallTicket, String name, String branch, String year) {
+        Student student = saveOrGetCore(adminId, hallTicket, name);
+        boolean changed = false;
+        if (branch != null && !branch.isBlank() && !branch.trim().equals(student.getBranch())) {
+            student.setBranch(trimTo(branch, 60));
+            changed = true;
+        }
+        if (year != null && !year.isBlank() && !year.trim().equals(student.getYear())) {
+            student.setYear(trimTo(year, 20));
+            changed = true;
+        }
+        return changed ? studentRepository.save(student) : student;
+    }
+
+    private static String trimTo(String value, int max) {
+        String t = value.trim();
+        return t.length() > max ? t.substring(0, max) : t;
+    }
+
+    private Student saveOrGetCore(Long adminId, String hallTicket, String name) {
         String ticket = hallTicket.trim();
 
         return studentRepository.findByAdminIdAndHallTicketIgnoreCase(adminId, ticket)
