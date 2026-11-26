@@ -31,6 +31,7 @@ public class ExamController {
     private final SlotRepository slotRepository;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final com.Exam.Exam_System.service.ProctorFrameService proctorFrames;
+    private final com.Exam.Exam_System.service.AttemptCache attemptCache;
 
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(ExamController.class);
@@ -43,7 +44,9 @@ public class ExamController {
                           PublicationService publicationService,
                           SlotRepository slotRepository,
                           org.springframework.jdbc.core.JdbcTemplate jdbc,
-                          com.Exam.Exam_System.service.ProctorFrameService proctorFrames) {
+                          com.Exam.Exam_System.service.ProctorFrameService proctorFrames,
+                          com.Exam.Exam_System.service.AttemptCache attemptCache) {
+        this.attemptCache = attemptCache;
         this.proctorFrames = proctorFrames;
         this.slotRepository = slotRepository;
         this.examRepository = examRepository;
@@ -220,6 +223,7 @@ public class ExamController {
         Exam exam = accessGuard.requireOwnedExam(examId);
 
         if (updated.getTitle() != null && !updated.getTitle().isBlank()) exam.setTitle(updated.getTitle());
+        Integer previousDuration = exam.getDuration();
         if (updated.getDuration() != null && updated.getDuration() > 0) exam.setDuration(updated.getDuration());
         if (updated.getStartDate() != null) exam.setStartDate(updated.getStartDate());
         if (updated.getEndDate() != null) exam.setEndDate(updated.getEndDate());
@@ -229,7 +233,31 @@ public class ExamController {
         exam.setEnableCamera(updated.isEnableCamera());
         exam.setEnableMic(updated.isEnableMic());
 
-        return examRepository.save(exam);
+        Exam saved = examRepository.save(exam);
+
+        // A new duration applies to papers being written now, not only to
+        // those started later. A deadline is fixed when a paper starts, so an
+        // exam created at the default 180 minutes and corrected to 10 after
+        // candidates began left them three hours -- "the time is over and it
+        // still opens". Each running paper is re-timed from its own start,
+        // keeping any time returned for a dropped connection; one already past
+        // the new time is finished on its next clock poll, answers kept.
+        if (saved.getDuration() != null && !saved.getDuration().equals(previousDuration)) {
+            List<Long> running = jdbc.queryForList(
+                    "SELECT id FROM attempts WHERE exam_id = ? AND status = 'STARTED' AND start_time IS NOT NULL",
+                    Long.class, examId);
+            if (!running.isEmpty()) {
+                jdbc.update("""
+                        UPDATE attempts
+                           SET end_time = DATE_ADD(start_time, INTERVAL (? * 60 + extended_seconds) SECOND)
+                         WHERE exam_id = ? AND status = 'STARTED' AND start_time IS NOT NULL
+                        """, saved.getDuration(), examId);
+                running.forEach(attemptCache::invalidate);
+                log.warn("Exam {} duration {} -> {} minutes by admin {}; re-timed {} running paper(s).",
+                        examId, previousDuration, saved.getDuration(), currentUser.adminId(), running.size());
+            }
+        }
+        return saved;
     }
 
     /**
