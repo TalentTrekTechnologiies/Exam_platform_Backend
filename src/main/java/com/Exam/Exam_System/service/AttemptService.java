@@ -195,6 +195,47 @@ public class AttemptService {
      * registrations come in.
      */
     @Transactional
+    /**
+     * Papers for the candidates of an exam who have none yet, and nothing else.
+     *
+     * The automatic counterpart to prepareAttempts: it runs on publishing and
+     * every couple of minutes while an exam has a sitting to come, including
+     * while candidates are starting. So it never rebuilds an existing paper,
+     * and it is deliberately not one transaction: each paper is created and
+     * committed on its own, and a candidate who pressed Start in the same
+     * moment (the unique key on student and exam refuses the second paper) is
+     * skipped rather than undoing every paper built before them.
+     */
+    public int prepareMissing(Long examId) {
+        List<Map<String, Object>> missing = jdbcTemplate.queryForList("""
+                SELECT es.student_id, es.slot_id
+                  FROM exam_student es
+                  LEFT JOIN attempts a ON a.student_id = es.student_id AND a.exam_id = es.exam_id
+                 WHERE es.exam_id = ? AND a.id IS NULL
+                """, examId);
+
+        int made = 0;
+        for (Map<String, Object> row : missing) {
+            Attempt attempt = new Attempt();
+            attempt.setStudentId(((Number) row.get("student_id")).longValue());
+            attempt.setExamId(examId);
+            Object slot = row.get("slot_id");
+            attempt.setSlotId(slot == null ? null : ((Number) slot).longValue());
+            attempt.setStatus(PENDING);
+            try {
+                Attempt saved = attemptRepository.save(attempt);
+                paperService.buildPaper(saved.getId(), examId);
+                made++;
+            } catch (DataIntegrityViolationException alreadyStarted) {
+                // They pressed Start while this ran; Start built their paper.
+            }
+        }
+        if (made > 0) {
+            log.info("Prepared {} missing paper(s) for exam {}.", made, examId);
+        }
+        return made;
+    }
+
     public Map<String, Object> prepareAttempts(Long examId) {
         List<ExamStudent> mappings = examStudentRepository.findByExamId(examId);
 

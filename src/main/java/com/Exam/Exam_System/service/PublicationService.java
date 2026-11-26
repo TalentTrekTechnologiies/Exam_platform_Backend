@@ -223,8 +223,9 @@ public class PublicationService {
         // After, only candidates enrolled since then can be without one.
         int prepared = (int) attemptRepository.countByExamId(exam.getId());
         if (exam.isPublished() && candidates > 0 && prepared < candidates) {
-            warnings.add((candidates - prepared) + " candidate(s) have no paper ready yet. They will still "
-                    + "get one when they press Start; Prepare papers now builds them in advance for a faster start.");
+            warnings.add((candidates - prepared) + " candidate(s) do not have a paper ready yet. The server "
+                    + "prepares them automatically within a couple of minutes -- there is nothing to do, and "
+                    + "anyone who starts before then gets theirs at Start.");
         }
 
         PublicationStatus status = new PublicationStatus();
@@ -324,8 +325,8 @@ public class PublicationService {
         Long examId = exam.getId();
         java.util.concurrent.CompletableFuture.runAsync(() -> {
             try {
-                var report = attemptService.prepareAttempts(examId);
-                log.info("Exam {} published; papers prepared: {}", examId, report);
+                int made = attemptService.prepareMissing(examId);
+                log.info("Exam {} published; {} paper(s) prepared.", examId, made);
             } catch (RuntimeException e) {
                 log.warn("Exam {} published, but preparing papers failed: {}", examId, e.toString());
             }
