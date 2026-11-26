@@ -214,6 +214,51 @@ public class AdminController {
     }
 
     /**
+     * Uses a video hosted elsewhere instead of an uploaded file: a YouTube link,
+     * or a direct link to a video file.
+     *
+     * A link also spares this server the download: a whole hall fetching one
+     * file in the same few minutes is load the college's own box does not
+     * carry when the video streams from YouTube.
+     *
+     * Only those two kinds are accepted. Any other page is a site that may
+     * refuse to be framed, or that a candidate could navigate away into from
+     * the lobby; and it must be https, or the browser blocks it on an https
+     * exam page.
+     */
+    @PutMapping("/profile/intro-video-link")
+    public Map<String, Object> linkIntroVideo(@RequestBody Map<String, Object> request) {
+        String url = request.get("url") == null ? "" : request.get("url").toString().trim();
+        if (url.length() > 255) {
+            throw new IllegalArgumentException("That link is too long. Use the video's short share link.");
+        }
+        java.net.URI uri;
+        try {
+            uri = java.net.URI.create(url);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("That is not a valid link.");
+        }
+        String host = uri.getHost() == null ? "" : uri.getHost().toLowerCase(Locale.ROOT);
+        String path = uri.getPath() == null ? "" : uri.getPath().toLowerCase(Locale.ROOT);
+        if (!"https".equalsIgnoreCase(uri.getScheme()) || host.isBlank()) {
+            throw new IllegalArgumentException("Use an https:// link.");
+        }
+        boolean youtube = host.equals("youtu.be") || host.equals("youtube.com") || host.endsWith(".youtube.com")
+                || host.equals("youtube-nocookie.com") || host.endsWith(".youtube-nocookie.com");
+        boolean videoFile = path.matches(".*\\.(mp4|webm|ogg|mov)$");
+        if (!youtube && !videoFile) {
+            throw new IllegalArgumentException(
+                    "Use a YouTube link, or a direct link to a video file (.mp4 or .webm).");
+        }
+
+        Admin admin = adminRepository.findById(currentUser.adminId())
+                .orElseThrow(() -> new NoSuchElementException("Account not found"));
+        admin.setIntroVideo(url);
+        adminRepository.save(admin);
+        return introVideo();
+    }
+
+    /**
      * Builds this institution's URL slug from its name, e.g.
      * "KSRM College of Engineering" -> "ksrm-college-of-engineering".
      *
