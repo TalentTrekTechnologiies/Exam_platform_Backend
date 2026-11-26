@@ -305,15 +305,22 @@ public class PublicationService {
     /**
      * Closes the exam again.
      *
-     * Deliberately refuses once anyone has started: withdrawing a paper from
-     * under a candidate mid-sitting is never the right answer to anything.
+     * Refuses only while somebody is writing: withdrawing a paper from under a
+     * candidate mid-sitting is never the right answer to anything.
+     *
+     * It used to refuse once anyone had started at all, finished or not, so an
+     * exam a single candidate had submitted could never be unpublished -- while
+     * the delete screen told the admin to unpublish it instead. Submitted
+     * results stay exactly where they are; unpublishing only stops new sign-ins.
      */
     @Transactional
     public PublicationStatus unpublish(Exam exam) {
-        long started = attemptRepository.countByExamIdAndStatusNot(exam.getId(), "PENDING");
-        if (started > 0) {
+        long writing = attemptRepository.countByExamIdAndStatusAndEndTimeAfter(
+                exam.getId(), "STARTED", java.time.LocalDateTime.now());
+        if (writing > 0) {
             throw new IllegalStateException(
-                    "CANNOT_UNPUBLISH_IN_PROGRESS: " + started + " candidate(s) have already begun this exam.");
+                    "CANNOT_UNPUBLISH_IN_PROGRESS: " + writing + " candidate(s) are writing this exam right now. "
+                            + "Unpublish it once they have submitted.");
         }
 
         exam.setPublished(false);

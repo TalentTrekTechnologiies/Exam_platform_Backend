@@ -16,4 +16,7 @@ public interface AttemptRepository extends JpaRepository<Attempt, Long> {
 
     /** How many candidates have actually begun, i.e. are no longer PENDING. */
     long countByExamIdAndStatusNot(Long examId, String status);
+
+    /** Candidates writing right now: started, and their time not yet up. */
+    long countByExamIdAndStatusAndEndTimeAfter(Long examId, String status, java.time.LocalDateTime now);
 }

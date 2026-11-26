@@ -30,6 +30,7 @@ public class ExamController {
     private final PublicationService publicationService;
     private final SlotRepository slotRepository;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+    private final com.Exam.Exam_System.service.ProctorFrameService proctorFrames;
 
     private static final org.slf4j.Logger log =
             org.slf4j.LoggerFactory.getLogger(ExamController.class);
@@ -41,7 +42,9 @@ public class ExamController {
                           AttemptService attemptService,
                           PublicationService publicationService,
                           SlotRepository slotRepository,
-                          org.springframework.jdbc.core.JdbcTemplate jdbc) {
+                          org.springframework.jdbc.core.JdbcTemplate jdbc,
+                          com.Exam.Exam_System.service.ProctorFrameService proctorFrames) {
+        this.proctorFrames = proctorFrames;
         this.slotRepository = slotRepository;
         this.examRepository = examRepository;
         this.adminRepository = adminRepository;
@@ -246,21 +249,45 @@ public class ExamController {
      * referring to a row that has gone.
      */
     @DeleteMapping("/{examId}")
-    public Map<String, Object> deleteExam(@PathVariable Long examId) {
+    public org.springframework.http.ResponseEntity<Map<String, Object>> deleteExam(
+            @PathVariable Long examId,
+            @RequestParam(defaultValue = "false") boolean includeResults) {
         accessGuard.requireOwnedExam(examId);
 
         Integer sat = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM attempts WHERE exam_id = ? AND status <> 'PENDING'",
                 Integer.class, examId);
-        if (sat != null && sat > 0) {
-            throw new IllegalStateException(
-                    sat + " candidate(s) have already sat this exam, so deleting it would erase"
+        if (sat != null && sat > 0 && !includeResults) {
+            // Said as a code the screen can act on: it offers deleting the
+            // results too, as a second, separately confirmed step.
+            Map<String, Object> refused = new java.util.LinkedHashMap<>();
+            refused.put("status", 409);
+            refused.put("code", "HAS_RESULTS");
+            refused.put("sat", sat);
+            refused.put("message", sat + " candidate(s) have already sat this exam, so deleting it would erase"
                     + " their answers and marks. Unpublish it instead — it disappears from"
                     + " candidates without disappearing from Results.");
+            return org.springframework.http.ResponseEntity.status(409).body(refused);
         }
 
-        // Prepared papers and the answers against them. Only PENDING attempts
-        // can exist at this point; the check above guarantees it.
+        // Even with results included, never from under somebody mid-paper.
+        Integer writing = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM attempts WHERE exam_id = ? AND status = 'STARTED' AND end_time > NOW()",
+                Integer.class, examId);
+        if (writing != null && writing > 0) {
+            throw new IllegalStateException(writing + " candidate(s) are writing this exam right now. "
+                    + "Delete it once they have submitted.");
+        }
+        if (sat != null && sat > 0) {
+            log.warn("Exam {} deleted with the results of {} candidate(s), by admin {}.",
+                    examId, sat, currentUser.adminId());
+        }
+
+        // Webcam stills are files, not rows: gone with the attempts they belong to.
+        java.util.List<Long> attemptIds = jdbc.queryForList(
+                "SELECT id FROM attempts WHERE exam_id = ?", Long.class, examId);
+
+        // Papers, answers and integrity records, for every attempt.
         jdbc.update("""
                 DELETE aq FROM attempt_questions aq
                   JOIN attempts a ON a.id = aq.attempt_id
@@ -293,10 +320,16 @@ public class ExamController {
         jdbc.update("DELETE FROM exam_slots WHERE exam_id = ?", examId);
 
         examRepository.deleteById(examId);
+        try {
+            proctorFrames.discard(attemptIds);
+        } catch (RuntimeException e) {
+            log.debug("Could not discard proctor frames for exam {}: {}", examId, e.toString());
+        }
 
         Map<String, Object> out = new java.util.LinkedHashMap<>();
         out.put("deleted", true);
         out.put("examId", examId);
-        return out;
+        out.put("resultsDeleted", sat == null ? 0 : sat);
+        return org.springframework.http.ResponseEntity.ok(out);
     }
 }
