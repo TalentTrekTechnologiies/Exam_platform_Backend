@@ -168,6 +168,17 @@ public class StudentController {
             // two papers was shown the one they had finished as a choice.
             if (live != null && "SUBMITTED".equals(live.getStatus())) { submittedAny = true; continue; }
             if (live != null && AttemptService.STARTED.equals(live.getStatus())) {
+                // Begun but never handed in -- a closed browser, a lost
+                // connection. Return any time the gap is owed, then ask the
+                // clock: if the paper's time is over it is finished here, and
+                // it stops being offered. Without this a paper abandoned at
+                // 9:15 still appeared at sign-in at 9:50, beside the exam the
+                // candidate had actually come for.
+                attemptService.markSeen(live.getId());
+                if (attemptService.getRemainingSeconds(live.getId()) <= 0) {
+                    submittedAny = true;
+                    continue;
+                }
                 if (chosenExamId == null || chosenExamId.equals(mapping.getExamId())) {
                     openNow.add(mapping);
                 }
