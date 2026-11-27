@@ -181,10 +181,34 @@ public class StudentController {
                 // it stops being offered. Without this a paper abandoned at
                 // 9:15 still appeared at sign-in at 9:50, beside the exam the
                 // candidate had actually come for.
-                attemptService.markSeen(live.getId());
-                if (attemptService.getRemainingSeconds(live.getId()) <= 0) {
+                //
+                // Asked without touching the heartbeat: signing in is not
+                // writing, and stamping it here made the check below see every
+                // returning candidate as already writing somewhere. Time owed
+                // for a drop is credited at Start.
+                if (!attemptService.couldStillWrite(live, now)) {
+                    attemptService.getRemainingSeconds(live.getId());   // finishes it
                     refusals.add(new Refusal(live.getEndTime() != null ? live.getEndTime() : now,
                             submittedMessage(examForMapping.getTitle())));
+                    continue;
+                }
+
+                // One paper, one computer. Sign-in is by hall ticket alone, so a
+                // candidate who mistypes a digit and presses "Yes, this is me"
+                // without reading the name was let into another candidate's
+                // live paper -- and whichever of them submitted ended it for
+                // both: the owner saw it submitted "without doing anything".
+                // A paper whose screen checked in within the last minute is
+                // being written; a second sign-in is refused, and the person
+                // told to fetch the invigilator. The owner, if their own
+                // computer failed, gets back in once that minute has passed.
+                if (live.getLastSeenAt() != null
+                        && live.getLastSeenAt().isAfter(now.minusSeconds(IN_USE_SECONDS))) {
+                    refusals.add(new Refusal(now, "Hall ticket " + student.getHallTicket()
+                            + " is being used to write " + examForMapping.getTitle()
+                            + " on another computer right now. Check the number you typed. If it is yours,"
+                            + " tell your invigilator at once; if your own computer just stopped, wait a"
+                            + " minute and sign in again."));
                     continue;
                 }
                 if (chosenExamId == null || chosenExamId.equals(mapping.getExamId())) {
@@ -288,6 +312,9 @@ public class StudentController {
         body.put("slotId", valid.getSlotId());
         return ResponseEntity.ok(body);
     }
+
+    /** A paper heard from this recently is being written on some screen right now. */
+    private static final long IN_USE_SECONDS = 60;
 
     /** One exam's reason a candidate cannot enter it now, and the moment it belongs to. */
     private record Refusal(LocalDateTime when, String message) {

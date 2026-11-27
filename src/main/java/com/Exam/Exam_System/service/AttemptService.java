@@ -397,6 +397,18 @@ public class AttemptService {
         return false;
     }
 
+    /**
+     * Whether a started paper could still be written: its deadline has not
+     * passed, or has passed by less than the time a dropped connection could
+     * still be given back. Read-only -- it neither stamps the heartbeat nor
+     * grants anything; Start does both.
+     */
+    public boolean couldStillWrite(Attempt attempt, LocalDateTime now) {
+        if (attempt.getEndTime() == null) return false;
+        long owedAtMost = Math.max(0, reconnectMaxSeconds - attempt.getExtendedSeconds());
+        return now.isBefore(attempt.getEndTime().plusSeconds(owedAtMost));
+    }
+
     public long getRemainingSeconds(Long attemptId) {
         AttemptCache.AttemptMeta meta = attemptCache.get(attemptId);
 
